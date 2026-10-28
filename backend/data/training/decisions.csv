@@ -1,0 +1,33 @@
+decision_id,scenario_id,decision_maker_id,recorded_choice_id,rationale
+DEC-SCN001-DM01,SCN-001,DM-01,SUP-B,Selected the lowest unit cost to reduce procurement spend.
+DEC-SCN001-DM02,SCN-001,DM-02,SUP-C,Selected the fastest replenishment to protect service levels.
+DEC-SCN001-DM03,SCN-001,DM-03,SUP-A,Preferred the strongest balanced reliability and risk posture.
+DEC-SCN001-DM04,SCN-001,DM-04,SUP-C,Accepted a moderate premium for faster delivery and balance.
+DEC-SCN002-DM01,SCN-002,DM-01,SUP-B,Used regional stock to avoid emergency sourcing premiums.
+DEC-SCN002-DM02,SCN-002,DM-02,SUP-C,Selected the fastest alternate with a confirmed disruption plan.
+DEC-SCN002-DM03,SCN-002,DM-03,SUP-C,Preferred the alternate with documented continuity controls.
+DEC-SCN002-DM04,SCN-002,DM-04,SUP-B,Chose immediately available stock to limit near-term exposure.
+DEC-SCN003-DM01,SCN-003,DM-01,SUP-B,Accepted a longer lead time to capture the lowest quote.
+DEC-SCN003-DM02,SCN-003,DM-02,SUP-C,Protected replenishment speed despite the cost premium.
+DEC-SCN003-DM03,SCN-003,DM-03,SUP-A,Favored the most dependable supply under volatile market conditions.
+DEC-SCN003-DM04,SCN-003,DM-04,SUP-C,Balanced continuity and price without choosing the slowest option.
+DEC-SCN004-DM01,SCN-004,DM-01,SUP-B,Selected the lowest price while requiring extra incoming inspection.
+DEC-SCN004-DM02,SCN-004,DM-02,SUP-C,Chose the fast response and added inspection at receipt.
+DEC-SCN004-DM03,SCN-004,DM-03,SUP-A,Required the strongest audit evidence and traceability.
+DEC-SCN004-DM04,SCN-004,DM-04,SUP-A,Accepted the higher cost to reduce quality escape risk.
+DEC-SCN005-DM01,SCN-005,DM-01,SUP-B,Reserved the largest capacity at the lowest unit price.
+DEC-SCN005-DM02,SCN-005,DM-02,SUP-B,Prioritized enough volume to meet the seasonal demand window.
+DEC-SCN005-DM03,SCN-005,DM-03,SUP-A,Preferred the most dependable supplier for critical peak demand.
+DEC-SCN005-DM04,SCN-005,DM-04,SUP-B,Selected scalable capacity and planned a split replenishment.
+DEC-SCN006-DM01,SCN-006,DM-01,SUP-A,Accepted a slower detour to avoid the premium carrier rate.
+DEC-SCN006-DM02,SCN-006,DM-02,SUP-C,Selected the fastest route confirmed clear of the strike.
+DEC-SCN006-DM03,SCN-006,DM-03,SUP-C,Required a route with verified strike avoidance controls.
+DEC-SCN006-DM04,SCN-006,DM-04,SUP-A,Balanced cost and carrier reliability using the known detour.
+DEC-SCN007-DM01,SCN-007,DM-01,SUP-B,Accepted additional checks to capture substantial unit-cost savings.
+DEC-SCN007-DM02,SCN-007,DM-02,SUP-C,Selected the fastest qualified refrigerated route.
+DEC-SCN007-DM03,SCN-007,DM-03,SUP-A,Required validated cold-chain controls and temperature telemetry.
+DEC-SCN007-DM04,SCN-007,DM-04,SUP-A,Selected the option with the strongest overall cold-chain assurance.
+DEC-SCN008-DM01,SCN-008,DM-01,SUP-B,Introduced a lower-cost alternate to reduce incumbent dependence.
+DEC-SCN008-DM02,SCN-008,DM-02,SUP-C,Qualified a second source with a shorter lead time.
+DEC-SCN008-DM03,SCN-008,DM-03,SUP-C,Reduced concentration risk by selecting the qualified alternate.
+DEC-SCN008-DM04,SCN-008,DM-04,SUP-C,Balanced diversification with service and acceptable incremental cost.

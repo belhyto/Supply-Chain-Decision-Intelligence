@@ -1,0 +1,5 @@
+decision_maker_id,name,role,cost,reliability,speed,risk,description
+DM-01,Procurement Manager,Cost-focused,0.50,0.20,0.15,0.15,Prioritizes cost control while retaining acceptable reliability.
+DM-02,Operations Manager,Speed-focused,0.10,0.30,0.45,0.15,Prioritizes fast replenishment and reliable delivery.
+DM-03,Risk & Quality Manager,Risk-focused,0.10,0.25,0.15,0.50,Prioritizes risk reduction and supplier quality assurance.
+DM-04,Supply Chain Director,Balanced,0.25,0.30,0.20,0.25,Balances reliability cost speed and supply resilience.

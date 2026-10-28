@@ -1,0 +1,33 @@
+decision_id,status,actual_delivery_days,cost_variance_percent,stockout_units,notes
+DEC-SCN001-DM01,delayed,6,-3,120,Cost target met but delivery arrived after the stockout window.
+DEC-SCN001-DM02,fulfilled,3,4,0,Expedited delivery prevented the modeled stockout.
+DEC-SCN001-DM03,fulfilled,4,2,0,Order arrived within the required window.
+DEC-SCN001-DM04,fulfilled,3,5,0,Faster delivery protected availability at a modest premium.
+DEC-SCN002-DM01,fulfilled,3,0,0,Regional inventory was available as promised.
+DEC-SCN002-DM02,fulfilled,2,7,0,Alternate route arrived on time at a premium.
+DEC-SCN002-DM03,fulfilled,2,8,0,Continuity controls performed as expected.
+DEC-SCN002-DM04,delayed,5,-1,80,Regional inventory was partially delayed during the disruption.
+DEC-SCN003-DM01,delayed,15,-8,0,Low price achieved but replenishment missed the preferred date.
+DEC-SCN003-DM02,fulfilled,6,6,0,Faster supply limited production interruption.
+DEC-SCN003-DM03,fulfilled,8,10,0,Dependable supplier maintained continuity at a higher price.
+DEC-SCN003-DM04,fulfilled,6,3,0,Balanced option met the replenishment date.
+DEC-SCN004-DM01,partial,7,-5,40,Incoming inspection rejected a portion of the low-cost shipment.
+DEC-SCN004-DM02,fulfilled,4,4,0,Fast delivery passed added receiving inspection.
+DEC-SCN004-DM03,fulfilled,7,9,0,Traceability supported release with no rejected units.
+DEC-SCN004-DM04,fulfilled,7,8,0,Quality controls prevented a production interruption.
+DEC-SCN005-DM01,partial,13,-2,150,Capacity allocation was short of the full seasonal requirement.
+DEC-SCN005-DM02,partial,11,1,100,Peak demand exceeded confirmed capacity.
+DEC-SCN005-DM03,fulfilled,9,8,0,Dependable allocation covered the critical portion of demand.
+DEC-SCN005-DM04,partial,11,0,80,Split replenishment reduced but did not eliminate the shortfall.
+DEC-SCN006-DM01,delayed,5,-6,60,Low-cost corridor was affected by industrial action.
+DEC-SCN006-DM02,fulfilled,2,12,0,Premium route bypassed the strike.
+DEC-SCN006-DM03,fulfilled,2,14,0,Verified alternative routing maintained service.
+DEC-SCN006-DM04,delayed,4,-2,20,Detour was reliable but slower than planned.
+DEC-SCN007-DM01,failed,3,-10,400,Temperature monitoring gap led to a cold-chain rejection.
+DEC-SCN007-DM02,fulfilled,1,8,0,Qualified refrigerated transport maintained temperature.
+DEC-SCN007-DM03,fulfilled,2,12,0,Continuous telemetry confirmed compliant handling.
+DEC-SCN007-DM04,fulfilled,2,11,0,Cold-chain controls prevented spoilage.
+DEC-SCN008-DM01,fulfilled,9,-3,0,Alternate supplier delivered within the planned horizon.
+DEC-SCN008-DM02,fulfilled,6,7,0,Second source met the required delivery date.
+DEC-SCN008-DM03,fulfilled,6,6,0,Qualified alternate reduced concentration exposure.
+DEC-SCN008-DM04,fulfilled,6,5,0,Second source performed within expected service levels.

@@ -1,0 +1,175 @@
+- main [ref=e3]:
+  - generic [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]: DECISION INTELLIGENCE / PROTOTYPE
+      - heading "Supply Chain Decision Pipeline" [level=1] [ref=e7]
+      - paragraph [ref=e8]: Situation assessment · Personal preferences · Choice probabilities
+    - generic [ref=e9]: CONFIG-DRIVEN MOCK DATA
+  - generic [ref=e11]:
+    - generic [ref=e12]:
+      - generic [ref=e13]: CURRENT SITUATION · SC-2026-014
+      - heading "High-demand product stockout risk" [level=2] [ref=e14]
+      - paragraph [ref=e15]: A distribution center may run out of a high-demand product within 5 days. Replenishment is required quickly, but procurement cost and supplier disruption risk must be considered.
+      - generic [ref=e16]:
+        - generic [ref=e17]: "Product: Industrial water filters"
+        - generic [ref=e18]: "Required quantity: 1,200 units"
+        - generic [ref=e19]: "Required within: 5 days"
+        - generic [ref=e20]: "Stockout risk: High"
+        - generic [ref=e21]: "Location: West Distribution Center"
+    - generic [ref=e22]: DI01
+  - navigation [ref=e23]:
+    - button "1 Physical supply chain" [ref=e24] [cursor=pointer]:
+      - generic [ref=e25]: "1"
+      - generic [ref=e26]: Physical supply chain
+    - button "2 Digital twin" [active] [ref=e27] [cursor=pointer]:
+      - generic [ref=e28]: "2"
+      - generic [ref=e29]: Digital twin
+    - button "3 Decision pipeline" [ref=e30] [cursor=pointer]:
+      - generic [ref=e31]: "3"
+      - generic [ref=e32]: Decision pipeline
+    - button "4 Decision feedback" [ref=e33] [cursor=pointer]:
+      - generic [ref=e34]: "4"
+      - generic [ref=e35]: Decision feedback
+  - generic [ref=e245]:
+    - generic [ref=e246]:
+      - generic [ref=e247]: LAYER 02 · DIGITAL TWIN
+      - heading "Live operational representation" [level=2] [ref=e248]
+    - generic [ref=e249]: REVISION 1
+  - paragraph [ref=e250]: The twin holds a working snapshot of inventory, supplier capacity/performance, shipment state, and orders. Updates immediately change eligible suppliers and decision rankings.
+  - generic [ref=e251]:
+    - generic [ref=e252]:
+      - generic [ref=e253]: LAST UPDATE
+      - generic [ref=e254]: 10/27/2026, 5:30:00 AM
+    - generic [ref=e255]:
+      - generic [ref=e256]: SOURCE
+      - generic [ref=e257]: Initial mock operational snapshot
+    - generic [ref=e258]:
+      - generic [ref=e259]: RECENT EVENTS
+      - generic [ref=e260]: "0"
+  - generic [ref=e261]:
+    - generic [ref=e262]:
+      - heading "Supplier capacity & performance" [level=3] [ref=e263]
+      - generic [ref=e264]:
+        - text: SUP-A
+        - generic [ref=e265]:
+          - generic [ref=e266]:
+            - generic [ref=e267]: Capacity (units)
+            - generic [ref=e268]: "1800"
+          - generic [ref=e269]: Available
+          - generic [ref=e271]:
+            - generic [ref=e272]: reliability
+            - generic [ref=e273]: "90"
+          - generic [ref=e274]:
+            - generic [ref=e275]: cost
+            - generic [ref=e276]: "70"
+          - generic [ref=e277]:
+            - generic [ref=e278]: speed
+            - generic [ref=e279]: "85"
+          - generic [ref=e280]:
+            - generic [ref=e281]: risk
+            - generic [ref=e282]: "80"
+      - generic [ref=e283]:
+        - text: SUP-B
+        - generic [ref=e284]:
+          - generic [ref=e285]:
+            - generic [ref=e286]: Capacity (units)
+            - generic [ref=e287]: "2400"
+          - generic [ref=e288]: Available
+          - generic [ref=e290]:
+            - generic [ref=e291]: reliability
+            - generic [ref=e292]: "75"
+          - generic [ref=e293]:
+            - generic [ref=e294]: cost
+            - generic [ref=e295]: "95"
+          - generic [ref=e296]:
+            - generic [ref=e297]: speed
+            - generic [ref=e298]: "70"
+          - generic [ref=e299]:
+            - generic [ref=e300]: risk
+            - generic [ref=e301]: "85"
+      - generic [ref=e302]:
+        - text: SUP-C
+        - generic [ref=e303]:
+          - generic [ref=e304]:
+            - generic [ref=e305]: Capacity (units)
+            - generic [ref=e306]: "1500"
+          - generic [ref=e307]: Available
+          - generic [ref=e309]:
+            - generic [ref=e310]: reliability
+            - generic [ref=e311]: "85"
+          - generic [ref=e312]:
+            - generic [ref=e313]: cost
+            - generic [ref=e314]: "80"
+          - generic [ref=e315]:
+            - generic [ref=e316]: speed
+            - generic [ref=e317]: "90"
+          - generic [ref=e318]:
+            - generic [ref=e319]: risk
+            - generic [ref=e320]: "75"
+    - generic [ref=e321]:
+      - heading "Inventory & demand state" [level=3] [ref=e322]
+      - generic [ref=e323]:
+        - text: INV-FILTER-WEST
+        - generic [ref=e324]:
+          - generic [ref=e325]:
+            - generic [ref=e326]: On hand
+            - generic [ref=e327]: "620"
+          - generic [ref=e328]:
+            - generic [ref=e329]: Reserved
+            - generic [ref=e330]: "140"
+          - generic [ref=e331]:
+            - generic [ref=e332]: Daily demand
+            - generic [ref=e333]: "120"
+    - generic [ref=e334]:
+      - heading "Shipment locations & ETAs" [level=3] [ref=e335]
+      - generic [ref=e336]:
+        - text: SHP-2026-3402
+        - generic [ref=e337]:
+          - generic [ref=e338]:
+            - generic [ref=e339]: status
+            - generic [ref=e340]: In transit
+          - generic [ref=e341]:
+            - generic [ref=e342]: location
+            - generic [ref=e343]: Salt Lake City, UT
+          - generic [ref=e344]:
+            - generic [ref=e345]: ETA (days)
+            - generic [ref=e346]: "2"
+    - generic [ref=e347]:
+      - heading "Order status" [level=3] [ref=e348]
+      - generic [ref=e349]:
+        - text: ORD-2026-7781
+        - generic [ref=e351]:
+          - generic [ref=e352]: status
+          - generic [ref=e353]: Awaiting supplier selection
+  - generic [ref=e354]:
+    - heading "Apply incoming operational data" [level=3] [ref=e355]
+    - paragraph [ref=e356]: Simulate a validated feed update. Supplier performance changes are reflected in the next assessment; unavailable or under-capacity suppliers are excluded.
+    - generic [ref=e357]:
+      - generic [ref=e358]:
+        - text: Entity
+        - combobox "Entity" [ref=e359]:
+          - option "Inventory" [selected]
+          - option "Supplier"
+          - option "Shipment"
+          - option "Order"
+      - generic [ref=e360]:
+        - text: Record
+        - combobox "Record" [ref=e361]:
+          - option "INV-FILTER-WEST" [selected]
+      - generic [ref=e362]:
+        - text: Field
+        - combobox "Field" [ref=e363]:
+          - option "on_hand_units" [selected]
+          - option "reserved_units"
+          - option "daily_demand_units"
+      - generic [ref=e364]:
+        - text: New value
+        - textbox "New value" [ref=e365]:
+          - /placeholder: "Current: 620"
+      - button "Apply update" [ref=e366] [cursor=pointer]
+  - generic [ref=e367]:
+    - heading "Recent twin update events" [level=3] [ref=e368]
+    - paragraph [ref=e369]: No operational updates recorded this session.
+  - generic [ref=e166]:
+    - generic [ref=e167]: DIGITAL TWIN / MOCK OPERATIONAL DATA
+    - generic [ref=e168]: Illustrative decision support · Human decision remains final

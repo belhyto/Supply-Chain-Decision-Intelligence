@@ -1,0 +1,172 @@
+- main [ref=e3]:
+  - generic [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]: DECISION INTELLIGENCE / PROTOTYPE
+      - heading "Supply Chain Decision Pipeline" [level=1] [ref=e7]
+      - paragraph [ref=e8]: Situation assessment · Personal preferences · Choice probabilities
+    - generic [ref=e9]: CONFIG-DRIVEN MOCK DATA
+  - generic [ref=e11]:
+    - generic [ref=e12]:
+      - generic [ref=e13]: CURRENT SITUATION · SC-2026-014
+      - heading "High-demand product stockout risk" [level=2] [ref=e14]
+      - paragraph [ref=e15]: A distribution center may run out of a high-demand product within 5 days. Replenishment is required quickly, but procurement cost and supplier disruption risk must be considered.
+      - generic [ref=e16]:
+        - generic [ref=e17]: "Product: Industrial water filters"
+        - generic [ref=e18]: "Required quantity: 1,200 units"
+        - generic [ref=e19]: "Required within: 5 days"
+        - generic [ref=e20]: "Stockout risk: High"
+        - generic [ref=e21]: "Location: West Distribution Center"
+    - generic [ref=e22]: DI01
+  - navigation [ref=e23]:
+    - button "1 Physical supply chain" [ref=e24] [cursor=pointer]:
+      - generic [ref=e25]: "1"
+      - generic [ref=e26]: Physical supply chain
+    - button "2 Digital twin" [ref=e27] [cursor=pointer]:
+      - generic [ref=e28]: "2"
+      - generic [ref=e29]: Digital twin
+    - button "3 Decision pipeline" [ref=e30] [cursor=pointer]:
+      - generic [ref=e31]: "3"
+      - generic [ref=e32]: Decision pipeline
+    - button "4 Decision feedback" [ref=e33] [cursor=pointer]:
+      - generic [ref=e34]: "4"
+      - generic [ref=e35]: Decision feedback
+  - navigation [ref=e36]:
+    - button "1 Situation & suitability" [ref=e37] [cursor=pointer]:
+      - generic [ref=e38]: "1"
+      - generic [ref=e39]: Situation & suitability
+    - button "2 Decision preferences" [ref=e40] [cursor=pointer]:
+      - generic [ref=e41]: "2"
+      - generic [ref=e42]: Decision preferences
+    - button "3 Choice probabilities" [ref=e43] [cursor=pointer]:
+      - generic [ref=e44]: "3"
+      - generic [ref=e45]: Choice probabilities
+  - generic [ref=e46]:
+    - generic [ref=e47]:
+      - generic [ref=e48]: STAGE 01
+      - heading "Situation assessment & suitability" [level=2] [ref=e49]
+    - generic [ref=e50]: WEIGHTED SCORE / 100
+  - generic [ref=e51]:
+    - generic [ref=e52]:
+      - generic [ref=e53]: TWIN REVISION
+      - generic [ref=e54]: "1"
+    - generic [ref=e55]:
+      - generic [ref=e56]: AVAILABLE INVENTORY
+      - generic [ref=e57]: 480 units · 4 days cover
+    - generic [ref=e58]:
+      - generic [ref=e59]: ELIGIBLE SUPPLIERS
+      - generic [ref=e60]: "3"
+  - generic [ref=e61]:
+    - generic [ref=e62]:
+      - heading "Operational scoring weights" [level=3] [ref=e63]
+      - generic [ref=e64]:
+        - generic [ref=e65]: Delivery reliability
+        - generic [ref=e66]: 35%
+      - generic [ref=e69]:
+        - generic [ref=e70]: Cost suitability
+        - generic [ref=e71]: 25%
+      - generic [ref=e74]:
+        - generic [ref=e75]: Delivery speed
+        - generic [ref=e76]: 25%
+      - generic [ref=e79]:
+        - generic [ref=e80]: Supply-risk suitability
+        - generic [ref=e81]: 15%
+      - paragraph [ref=e84]: Weights are normalized by the API. Option scores are configured assessments.
+    - generic [ref=e85]:
+      - heading "Suitability ranking" [level=3] [ref=e86]
+      - generic [ref=e87]:
+        - generic [ref=e88]: "01"
+        - generic [ref=e89]:
+          - generic [ref=e90]: RapidRoute Industrial
+          - generic [ref=e91]: "SUP-C · Lead time (days): 3 · Unit cost: $39.00 · capacity_units: 1500"
+        - strong [ref=e94]: "83.50"
+      - generic [ref=e95]:
+        - generic [ref=e96]: "02"
+        - generic [ref=e97]:
+          - generic [ref=e98]: Northstar Components
+          - generic [ref=e99]: "SUP-A · Lead time (days): 4 · Unit cost: $42.00 · capacity_units: 1800"
+        - strong [ref=e102]: "82.25"
+      - generic [ref=e103]:
+        - generic [ref=e104]: "03"
+        - generic [ref=e105]:
+          - generic [ref=e106]: ValueLink Supply
+          - generic [ref=e107]: "SUP-B · Lead time (days): 5 · Unit cost: $35.00 · capacity_units: 2400"
+        - strong [ref=e110]: "80.25"
+      - generic [ref=e111]: "Top-ranked: RapidRoute IndustrialSuitability is a weighted fit score, not a probability."
+  - generic [ref=e112]:
+    - heading "Available options" [level=3] [ref=e113]
+    - generic [ref=e114]:
+      - article [ref=e115]:
+        - text: SUP-A
+        - heading "Northstar Components" [level=4] [ref=e116]
+        - paragraph [ref=e117]: Strong delivery record; mid-range cost.
+        - generic [ref=e118]:
+          - generic [ref=e119]:
+            - text: Delivery reliability
+            - generic [ref=e120]: "90"
+          - generic [ref=e121]:
+            - text: Cost suitability
+            - generic [ref=e122]: "70"
+          - generic [ref=e123]:
+            - text: Delivery speed
+            - generic [ref=e124]: "85"
+          - generic [ref=e125]:
+            - text: Supply-risk suitability
+            - generic [ref=e126]: "80"
+        - generic [ref=e127]:
+          - generic [ref=e128]:
+            - text: Lead time (days)
+            - generic [ref=e129]: "4"
+          - generic [ref=e130]:
+            - text: Unit cost
+            - generic [ref=e131]: $42.00
+      - article [ref=e132]:
+        - text: SUP-B
+        - heading "ValueLink Supply" [level=4] [ref=e133]
+        - paragraph [ref=e134]: Lowest cost; delivery speed is less attractive.
+        - generic [ref=e135]:
+          - generic [ref=e136]:
+            - text: Delivery reliability
+            - generic [ref=e137]: "75"
+          - generic [ref=e138]:
+            - text: Cost suitability
+            - generic [ref=e139]: "95"
+          - generic [ref=e140]:
+            - text: Delivery speed
+            - generic [ref=e141]: "70"
+          - generic [ref=e142]:
+            - text: Supply-risk suitability
+            - generic [ref=e143]: "85"
+        - generic [ref=e144]:
+          - generic [ref=e145]:
+            - text: Lead time (days)
+            - generic [ref=e146]: "5"
+          - generic [ref=e147]:
+            - text: Unit cost
+            - generic [ref=e148]: $35.00
+      - article [ref=e149]:
+        - text: SUP-C
+        - heading "RapidRoute Industrial" [level=4] [ref=e150]
+        - paragraph [ref=e151]: Fastest lead time; somewhat higher supply-risk score variation.
+        - generic [ref=e152]:
+          - generic [ref=e153]:
+            - text: Delivery reliability
+            - generic [ref=e154]: "85"
+          - generic [ref=e155]:
+            - text: Cost suitability
+            - generic [ref=e156]: "80"
+          - generic [ref=e157]:
+            - text: Delivery speed
+            - generic [ref=e158]: "90"
+          - generic [ref=e159]:
+            - text: Supply-risk suitability
+            - generic [ref=e160]: "75"
+        - generic [ref=e161]:
+          - generic [ref=e162]:
+            - text: Lead time (days)
+            - generic [ref=e163]: "3"
+          - generic [ref=e164]:
+            - text: Unit cost
+            - generic [ref=e165]: $39.00
+  - generic [ref=e166]:
+    - generic [ref=e167]: DIGITAL TWIN / MOCK OPERATIONAL DATA
+    - generic [ref=e168]: Illustrative decision support · Human decision remains final

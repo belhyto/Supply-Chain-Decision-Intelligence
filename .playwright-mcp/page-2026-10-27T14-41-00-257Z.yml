@@ -1,0 +1,114 @@
+- main [ref=e3]:
+  - generic [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]: DECISION INTELLIGENCE / PROTOTYPE
+      - heading "Supply Chain Decision Pipeline" [level=1] [ref=e7]
+      - paragraph [ref=e8]: Situation assessment · Personal preferences · Choice probabilities
+    - generic [ref=e9]: CONFIG-DRIVEN MOCK DATA
+  - generic [ref=e11]:
+    - generic [ref=e12]:
+      - generic [ref=e13]: CURRENT SITUATION · SC-2026-014
+      - heading "High-demand product stockout risk" [level=2] [ref=e14]
+      - paragraph [ref=e15]: A distribution center may run out of a high-demand product within 5 days. Replenishment is required quickly, but procurement cost and supplier disruption risk must be considered.
+      - generic [ref=e16]:
+        - generic [ref=e17]: "Product: Industrial water filters"
+        - generic [ref=e18]: "Required quantity: 1,200 units"
+        - generic [ref=e19]: "Required within: 5 days"
+        - generic [ref=e20]: "Stockout risk: High"
+        - generic [ref=e21]: "Location: West Distribution Center"
+    - generic [ref=e22]: DI01
+  - navigation [ref=e23]:
+    - button "1 Physical supply chain" [active] [ref=e24] [cursor=pointer]:
+      - generic [ref=e25]: "1"
+      - generic [ref=e26]: Physical supply chain
+    - button "2 Digital twin" [ref=e27] [cursor=pointer]:
+      - generic [ref=e28]: "2"
+      - generic [ref=e29]: Digital twin
+    - button "3 Decision pipeline" [ref=e30] [cursor=pointer]:
+      - generic [ref=e31]: "3"
+      - generic [ref=e32]: Decision pipeline
+    - button "4 Decision feedback" [ref=e33] [cursor=pointer]:
+      - generic [ref=e34]: "4"
+      - generic [ref=e35]: Decision feedback
+  - generic [ref=e169]:
+    - generic [ref=e170]:
+      - generic [ref=e171]: LAYER 01 · PHYSICAL SUPPLY CHAIN
+      - heading "Operational network" [level=2] [ref=e172]
+    - generic [ref=e173]: MOCK SOURCE RECORDS
+  - paragraph [ref=e174]: "Physical-world entities represented by this prototype: facilities, inventory, supplier capacity, shipments, and open orders."
+  - generic [ref=e175]:
+    - heading "Warehouses & distribution centers" [level=3] [ref=e176]
+    - article [ref=e178]:
+      - text: WH-WEST-01
+      - heading "West Distribution Center" [level=4] [ref=e179]
+      - paragraph [ref=e180]: Reno, NV
+  - generic [ref=e181]:
+    - heading "Suppliers" [level=3] [ref=e182]
+    - generic [ref=e183]:
+      - article [ref=e184]:
+        - text: SUP-A
+        - heading "Northstar Components" [level=4] [ref=e185]
+        - paragraph [ref=e186]: Strong delivery record; mid-range cost.
+        - generic [ref=e187]:
+          - generic [ref=e188]:
+            - generic [ref=e189]: lead_time_days
+            - generic [ref=e190]: "4"
+          - generic [ref=e191]:
+            - generic [ref=e192]: unit_cost
+            - generic [ref=e193]: $42.00
+      - article [ref=e194]:
+        - text: SUP-B
+        - heading "ValueLink Supply" [level=4] [ref=e195]
+        - paragraph [ref=e196]: Lowest cost; delivery speed is less attractive.
+        - generic [ref=e197]:
+          - generic [ref=e198]:
+            - generic [ref=e199]: lead_time_days
+            - generic [ref=e200]: "5"
+          - generic [ref=e201]:
+            - generic [ref=e202]: unit_cost
+            - generic [ref=e203]: $35.00
+      - article [ref=e204]:
+        - text: SUP-C
+        - heading "RapidRoute Industrial" [level=4] [ref=e205]
+        - paragraph [ref=e206]: Fastest lead time; somewhat higher supply-risk score variation.
+        - generic [ref=e207]:
+          - generic [ref=e208]:
+            - generic [ref=e209]: lead_time_days
+            - generic [ref=e210]: "3"
+          - generic [ref=e211]:
+            - generic [ref=e212]: unit_cost
+            - generic [ref=e213]: $39.00
+  - generic [ref=e214]:
+    - heading "Inventory & demand" [level=3] [ref=e215]
+    - article [ref=e217]:
+      - text: FILTER-IND-01
+      - heading "Industrial water filters" [level=4] [ref=e218]
+      - generic [ref=e219]:
+        - generic [ref=e220]:
+          - generic [ref=e221]: On hand
+          - generic [ref=e222]: 620 units
+        - generic [ref=e223]:
+          - generic [ref=e224]: Reserved
+          - generic [ref=e225]: 140 units
+        - generic [ref=e226]:
+          - generic [ref=e227]: Daily demand
+          - generic [ref=e228]: 120 units
+        - generic [ref=e229]:
+          - generic [ref=e230]: Reorder point
+          - generic [ref=e231]: 800 units
+  - generic [ref=e232]:
+    - generic [ref=e233]:
+      - heading "Orders" [level=3] [ref=e234]
+      - generic [ref=e235]:
+        - generic [ref=e236]: ORD-2026-7781
+        - generic [ref=e237]: 1,200 units · due in 5 days
+        - generic [ref=e238]: Awaiting supplier selection
+    - generic [ref=e239]:
+      - heading "Transportation & shipments" [level=3] [ref=e240]
+      - generic [ref=e241]:
+        - generic [ref=e242]: SHP-2026-3402
+        - generic [ref=e243]: 400 units · Salt Lake City, UT
+        - generic [ref=e244]: In transit · ETA 2 days
+  - generic [ref=e166]:
+    - generic [ref=e167]: DIGITAL TWIN / MOCK OPERATIONAL DATA
+    - generic [ref=e168]: Illustrative decision support · Human decision remains final

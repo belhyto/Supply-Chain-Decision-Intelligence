@@ -1,0 +1,63 @@
+- main [ref=e3]:
+  - generic [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]: DECISION INTELLIGENCE / PROTOTYPE
+      - heading "Supply Chain Decision Pipeline" [level=1] [ref=e7]
+      - paragraph [ref=e8]: Situation assessment · Personal preferences · Choice probabilities
+    - generic [ref=e9]: CONFIG-DRIVEN MOCK DATA
+  - generic [ref=e11]:
+    - generic [ref=e12]:
+      - generic [ref=e13]: CURRENT SITUATION · SC-2026-014
+      - heading "High-demand product stockout risk" [level=2] [ref=e14]
+      - paragraph [ref=e15]: A distribution center may run out of a high-demand product within 5 days. Replenishment is required quickly, but procurement cost and supplier disruption risk must be considered.
+      - generic [ref=e16]:
+        - generic [ref=e17]: "Product: Industrial water filters"
+        - generic [ref=e18]: "Required quantity: 1,200 units"
+        - generic [ref=e19]: "Required within: 5 days"
+        - generic [ref=e20]: "Stockout risk: High"
+        - generic [ref=e21]: "Location: West Distribution Center"
+    - generic [ref=e22]: DI01
+  - navigation [ref=e23]:
+    - button "1 Physical supply chain" [ref=e24] [cursor=pointer]:
+      - generic [ref=e25]: "1"
+      - generic [ref=e26]: Physical supply chain
+    - button "2 Digital twin" [ref=e27] [cursor=pointer]:
+      - generic [ref=e28]: "2"
+      - generic [ref=e29]: Digital twin
+    - button "3 Decision pipeline" [ref=e30] [cursor=pointer]:
+      - generic [ref=e31]: "3"
+      - generic [ref=e32]: Decision pipeline
+    - button "4 Decision feedback" [active] [ref=e33] [cursor=pointer]:
+      - generic [ref=e34]: "4"
+      - generic [ref=e35]: Decision feedback
+  - generic [ref=e370]:
+    - generic [ref=e371]:
+      - generic [ref=e372]: LAYER 04 · DECISION FEEDBACK
+      - heading "Decision and outcome learning loop" [level=2] [ref=e373]
+    - generic [ref=e374]: HUMAN DECISION RECORDED
+  - paragraph [ref=e375]: Record the option a person actually selected, compare it with the model's most likely choice, and later attach the observed operational outcome. This prototype records feedback in memory for this server session.
+  - generic [ref=e376]:
+    - heading "Record an actual decision" [level=3] [ref=e377]
+    - generic [ref=e378]:
+      - generic [ref=e379]:
+        - text: Decision-maker
+        - combobox "Decision-maker" [ref=e380]:
+          - option "Procurement Manager" [selected]
+          - option "Operations Manager"
+      - generic [ref=e381]:
+        - text: Chosen option
+        - combobox "Chosen option" [ref=e382]:
+          - option "RapidRoute Industrial" [selected]
+          - option "Northstar Components"
+          - option "ValueLink Supply"
+      - generic [ref=e383]:
+        - text: Decision rationale
+        - textbox "Decision rationale" [ref=e384]:
+          - /placeholder: Why was this option selected?
+      - button "Record decision" [ref=e385] [cursor=pointer]
+  - generic [ref=e386]:
+    - heading "Recorded decisions & observed outcomes" [level=3] [ref=e387]
+    - paragraph [ref=e388]: No decisions have been recorded yet.
+  - generic [ref=e166]:
+    - generic [ref=e167]: DIGITAL TWIN / MOCK OPERATIONAL DATA
+    - generic [ref=e168]: Illustrative decision support · Human decision remains final

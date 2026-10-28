@@ -1,0 +1,156 @@
+{
+  "domain_name": "Supply Chain",
+  "scenario": {
+    "id": "SC-2026-014",
+    "title": "High-demand product stockout risk",
+    "situation": "A distribution center may run out of a high-demand product within 5 days. Replenishment is required quickly, but procurement cost and supplier disruption risk must be considered.",
+    "required_units": 1200,
+    "required_within_days": 5,
+    "context": {
+      "Product": "Industrial water filters",
+      "Required quantity": "1,200 units",
+      "Required within": "5 days",
+      "Stockout risk": "High",
+      "Location": "West Distribution Center"
+    }
+  },
+  "criteria": [
+    { "key": "reliability", "label": "Delivery reliability" },
+    { "key": "cost", "label": "Cost suitability" },
+    { "key": "speed", "label": "Delivery speed" },
+    { "key": "risk", "label": "Supply-risk suitability" }
+  ],
+  "operational_weights": {
+    "reliability": 0.35,
+    "cost": 0.25,
+    "speed": 0.25,
+    "risk": 0.15
+  },
+  "attribute_labels": {
+    "lead_time_days": "Lead time (days)",
+    "unit_cost": "Unit cost"
+  },
+  "options": [
+    {
+      "id": "SUP-A",
+      "name": "Northstar Components",
+      "metrics": { "reliability": 90, "cost": 70, "speed": 85, "risk": 80 },
+      "attributes": { "lead_time_days": 4, "unit_cost": "$42.00" },
+      "notes": "Strong delivery record; mid-range cost."
+    },
+    {
+      "id": "SUP-B",
+      "name": "ValueLink Supply",
+      "metrics": { "reliability": 75, "cost": 95, "speed": 70, "risk": 85 },
+      "attributes": { "lead_time_days": 5, "unit_cost": "$35.00" },
+      "notes": "Lowest cost; delivery speed is less attractive."
+    },
+    {
+      "id": "SUP-C",
+      "name": "RapidRoute Industrial",
+      "metrics": { "reliability": 85, "cost": 80, "speed": 90, "risk": 75 },
+      "attributes": { "lead_time_days": 3, "unit_cost": "$39.00" },
+      "notes": "Fastest lead time; somewhat higher supply-risk score variation."
+    }
+  ],
+  "physical_network": {
+    "warehouses": [
+      { "id": "WH-WEST-01", "name": "West Distribution Center", "location": "Reno, NV" }
+    ],
+    "inventory": [
+      {
+        "id": "INV-FILTER-WEST",
+        "product": "Industrial water filters",
+        "sku": "FILTER-IND-01",
+        "warehouse_id": "WH-WEST-01",
+        "on_hand_units": 620,
+        "reserved_units": 140,
+        "daily_demand_units": 120,
+        "reorder_point_units": 800
+      }
+    ],
+    "orders": [
+      {
+        "id": "ORD-2026-7781",
+        "inventory_id": "INV-FILTER-WEST",
+        "quantity_units": 1200,
+        "status": "Awaiting supplier selection",
+        "due_in_days": 5
+      }
+    ],
+    "shipments": [
+      {
+        "id": "SHP-2026-3402",
+        "supplier_id": "SUP-A",
+        "order_id": "ORD-2026-7781",
+        "quantity_units": 400,
+        "status": "In transit",
+        "location": "Salt Lake City, UT",
+        "estimated_delivery_days": 2
+      }
+    ]
+  },
+  "digital_twin": {
+    "state": {
+      "revision": 1,
+      "suppliers": [
+        {
+          "id": "SUP-A",
+          "capacity_units": 1800,
+          "is_available": true,
+          "metrics": { "reliability": 90, "cost": 70, "speed": 85, "risk": 80 }
+        },
+        {
+          "id": "SUP-B",
+          "capacity_units": 2400,
+          "is_available": true,
+          "metrics": { "reliability": 75, "cost": 95, "speed": 70, "risk": 85 }
+        },
+        {
+          "id": "SUP-C",
+          "capacity_units": 1500,
+          "is_available": true,
+          "metrics": { "reliability": 85, "cost": 80, "speed": 90, "risk": 75 }
+        }
+      ],
+      "inventory": [
+        {
+          "id": "INV-FILTER-WEST",
+          "on_hand_units": 620,
+          "reserved_units": 140,
+          "daily_demand_units": 120
+        }
+      ],
+      "shipments": [
+        {
+          "id": "SHP-2026-3402",
+          "status": "In transit",
+          "location": "Salt Lake City, UT",
+          "estimated_delivery_days": 2
+        }
+      ],
+      "orders": [
+        { "id": "ORD-2026-7781", "status": "Awaiting supplier selection" }
+      ],
+      "last_updated": "2026-10-27T00:00:00+00:00",
+      "last_source": "Initial mock operational snapshot"
+    }
+  },
+  "decision_makers": [
+    {
+      "id": "DM-01",
+      "name": "Procurement Manager",
+      "role": "Cost-focused",
+      "preferences": { "reliability": 0.2, "cost": 0.5, "speed": 0.15, "risk": 0.15 },
+      "description": "Prioritizes cost control while retaining acceptable reliability."
+    },
+    {
+      "id": "DM-02",
+      "name": "Operations Manager",
+      "role": "Speed-focused",
+      "preferences": { "reliability": 0.3, "cost": 0.1, "speed": 0.45, "risk": 0.15 },
+      "description": "Prioritizes fast replenishment and reliable delivery."
+    }
+  ],
+  "probability_temperature": 8.0
+}
