@@ -1,6 +1,6 @@
-# Configurable Decision Intelligence Pipeline — Mock Prototype
+# Multi-Decision-Maker Decision Intelligence System with Supply Chain Application
 
-A three-stage prototype:
+This system incorporates a three-stage process:
 1. Situation assessment and option suitability scoring.
 2. Decision-maker-specific preference weighting and utility scoring.
 3. Choice probability estimates, comparison, and explanations.
@@ -42,6 +42,9 @@ python -m venv .venv
 # macOS/Linux:
 source .venv/bin/activate
 pip install -r requirements.txt
+uvicorn app.main:app --reload
+__
+.\.venv\Scripts\Activate.ps1
 uvicorn app.main:app --reload
 ```
 API docs: http://127.0.0.1:8000/docs
@@ -86,5 +89,188 @@ python -m unittest discover -s tests
 - Outcomes can carry validated twin updates, linking observed results back to the evolving representation. Updating the twin directly is also supported through the dashboard.
 - Twin state, event history, decisions, and outcomes are in-memory prototype data and reset when the backend restarts. No live WMS, ERP, TMS, supplier, or IoT feeds are connected.
 
-## Before production
-Add authentication/RBAC, audit logs, validation of business constraints, persistent storage, tests, model calibration, monitoring, and human approval workflows. Do not use the sample weights or probability temperature as production policy without domain validation.
+Let's take a practical example from Supply Chain Management: A sudden supplier disruption during a high-demand period.
+
+This example demonstrates all three stages of your decision model, involving four decision-makers who face the same situation but make different choices based on their priorities.
+
+# Example scenario: Supplier disruption during high demand
+
+## 1. Situation input — Stage 1
+
+A manufacturing company receives an alert that its primary supplier cannot deliver raw materials on time. Meanwhile, customer demand has increased by 30%.
+
+The management team must choose an alternative supplier.
+
+Situation parameters
+
+| Parameter                   | Reported value     |
+| --------------------------- | ------------------ |
+| Demand level                | High (+30%)        |
+| Current inventory           | 5 days of stock    |
+| Required inventory coverage | 20 days            |
+| Primary supplier status     | Disrupted          |
+| Production impact           | Potential shutdown |
+| Budget constraint           | ₹20 lakh           |
+| Delivery requirement        | Within 7 days      |
+
+The system identifies three possible alternatives.
+
+## 2. Available options and suitability — Stage 1
+
+| Parameter                    | Supplier A | Supplier B | Supplier C |
+| ---------------------------- | ---------- | ---------- | ---------- |
+| Procurement cost suitability | 95         | 70         | 80         |
+| Reliability                  | 65         | 95         | 80         |
+| Delivery speed               | 60         | 85         | 95         |
+| Risk suitability             | 60         | 90         | 75         |
+| Estimated delivery           | 7 days     | 4 days     | 2 days     |
+| Total cost                   | ₹14 lakh   | ₹18 lakh   | ₹20 lakh   |
+
+Assume the initial system calculates suitability using these weights:
+
+- Cost: 40%
+- Reliability: 25%
+- Delivery speed: 20%
+- Risk: 15%
+
+For Supplier A:
+
+\\[ (95 \times 0.40)+(65 \times 0.25)+(60 \times 0.20)+(60 \times 0.15) =74.25 \\]
+
+Overall suitability scores
+
+Supplier A
+
+74.25/100
+
+Supplier B
+
+82.25/100
+
+Supplier C
+
+82.75/100
+
+Supplier C has the highest overall suitability score, narrowly ahead of Supplier B.
+
+At this stage, the system has evaluated the alternatives. It has not made the final decision.
+
+## 3. Different decision-makers — Stage 2
+
+Now four people review the same situation and the same supplier options.
+
+Each person has different priorities.
+
+Decision-maker 1: Procurement Manager
+
+Cost-focused
+
+- Cost: 50%
+- Reliability: 20%
+- Speed: 15%
+- Risk: 15%
+
+Likely preference: Supplier A, because it is the cheapest.
+
+Decision-maker 2: Operations Manager
+
+Speed-focused
+
+- Cost: 10%
+- Reliability: 30%
+- Speed: 45%
+- Risk: 15%
+
+Likely preference: Supplier C, because it delivers fastest.
+
+Decision-maker 3: Risk & Quality Manager
+
+Risk-focused
+
+- Cost: 10%
+- Reliability: 25%
+- Speed: 15%
+- Risk: 50%
+
+Likely preference: Supplier B, because of its reliability and risk profile.
+
+Decision-maker 4: Supply Chain Director
+
+Balanced approach
+
+- Cost: 25%
+- Reliability: 30%
+- Speed: 20%
+- Risk: 25%
+
+Likely preference: Supplier B or C, balancing cost, reliability and speed.
+
+The important point is that all four people are responding to the same situation, but their priorities influence their choices.
+
+## 4. Choice probability — Stage 3
+
+The system calculates personalized utility scores and converts them into choice probabilities.
+
+For example, the output could look like this:
+
+Illustrative probability outputs, not empirically trained predictions.
+
+| Decision-maker        | Supplier A | Supplier B | Supplier C | Highest probability |
+| --------------------- | ---------- | ---------- | ---------- | ------------------- |
+| Procurement Manager   | 65%        | 20%        | 15%        | A                   |
+| Operations Manager    | 10%        | 30%        | 60%        | C                   |
+| Risk Manager          | 10%        | 70%        | 20%        | B                   |
+| Supply Chain Director | 15%        | 45%        | 40%        | B                   |
+
+Predicted supplier choice probabilities
+
+Illustrative probabilities for each decision-maker.
+
+Supplier A
+
+Supplier B
+
+Supplier C
+
+0%30%60%90%120%ProcurementOperationsRiskDirector
+
+The system can explain why different people might make different decisions in exactly the same situation.
+
+## 5. Record actual human decisions
+
+The four decision-makers actually make these choices:
+
+| Decision-maker        | Predicted first choice | Actual choice | Reason                      |
+| --------------------- | ---------------------- | ------------- | --------------------------- |
+| Procurement Manager   | A                      | A             | Lowest procurement cost     |
+| Operations Manager    | C                      | C             | Avoid production shutdown   |
+| Risk Manager          | B                      | B             | Highest reliability         |
+| Supply Chain Director | B                      | C             | Urgent customer commitments |
+
+The Supply Chain Director chose C even though B had the higher predicted probability.
+The system can record the difference between predicted and actual decisions and use the rationale to improve future preference estimates.
+
+## 6. What happens after the decision?
+
+The system records the actual operational outcome:
+
+- Was the supplier able to deliver on time?
+- Did production continue without interruption?
+- Was the budget exceeded?
+- Were quality issues reported?
+- Did the decision achieve its intended result?
+
+These outcomes become historical records for future analysis and ML training.
+
+## 7. What the system produces from Initial Rule based training
+
+## Decision intelligence output
+
+1. Situation understanding
+2. Option assessment
+3. Decision-maker modelling
+4. Choice prediction
+5. Decision recording
+6. Outcome learning
+
+# Building ML model based on the outputs of the initial system stages 
