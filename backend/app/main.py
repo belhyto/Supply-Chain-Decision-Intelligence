@@ -10,6 +10,10 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from sqlalchemy import text
+from app.database import engine
+from app.init_db import create_tables
+
 CONFIG_PATH = Path(__file__).parent / "config" / "decision_pipeline.json"
 TRAINING_DATA_PATH = Path(__file__).parent.parent / "data" / "training"
 
@@ -177,6 +181,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+def startup_event():
+    create_tables()
 
 
 class PreferenceProfile(BaseModel):
@@ -694,3 +703,18 @@ def record_decision_outcome(decision_id: str, request: OutcomeFeedbackRequest):
         "twin_updates": applied_events,
     }
     return record
+
+@app.get("/api/db-test")
+def test_database():
+    try:
+        with engine.connect() as connection:
+            result = connection.execute(text("SELECT 1"))
+            return {
+                "database": "Connected",
+                "test_result": result.scalar()
+            }
+    except Exception as e:
+        return {
+            "database": "Connection failed",
+            "error": str(e)
+        }
