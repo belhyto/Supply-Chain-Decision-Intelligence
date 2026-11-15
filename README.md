@@ -75,6 +75,11 @@ In development, Vite proxies `/api` requests to the FastAPI backend at `http://1
 - `GET /api/feedback` — decisions and any captured outcomes
 - `POST /api/feedback/decisions` — record a human-selected option with its model prediction and probability
 - `POST /api/feedback/decisions/{decision_id}/outcome` — record fulfillment status and optional twin updates from observed operations
+- `GET /api/context-graph?scenario_id=SCN-001&depth=3` — read a scenario-centered graph projection; omit the scenario ID for the full graph
+- `GET /api/context-graph/nodes/{node_key}/neighbors?depth=1` — traverse a node's relationships in either direction
+- `GET /api/context-graph/similar/{scenario_id}` — retrieve historical situations connected with `SIMILAR_TO`
+- `POST /api/context-graph/nodes` — persist a constraint, event, policy, external condition, evidence item, or source and connect it to a situation
+- `POST /api/context-graph/relationships` — persist a typed relationship between existing graph nodes
 
 ## Run backend tests
 From the `backend` directory:
@@ -82,12 +87,19 @@ From the `backend` directory:
 python -m unittest discover -s tests
 ```
 
+## Knowledge and memory graph
+The backend persists the existing situation, alternative, preference, assessment, decision-event, prediction, decision, and outcome records in PostgreSQL. `ContextNode` and `ContextRelationship` add extensible graph entities and typed edges with JSON properties, timestamps, and provenance. On startup, the graph is idempotently seeded from the synthetic training fixture.
+
+NetworkX builds an in-memory undirected `MultiGraph` from the persisted records for depth-limited traversal, neighbor lookup, and similar-situation retrieval. A relationship is stored once with its semantic source and target; the graph supports traversing it from either endpoint. Prediction distributions use `HAS_PREDICTION`/`EVALUATES`, while the modeled top choice is explicitly linked with `PREDICTED_AS`. Interactive decisions and their outcomes are also persisted, including links to the prediction, selected alternative, outcome, and any supplied operational context.
+
+The graph includes Situation, Parameter, Alternative, Criterion, DecisionMaker, Preference, Assessment, DecisionEvent, Prediction, Decision, Outcome, and extensible Context nodes. Seed provenance is marked as synthetic; interactive user-entered context and decisions use distinct provenance labels.
+
 ## Prototype layer behavior
 - The physical network is the mock baseline in `physical_network` within the domain configuration.
 - The digital twin starts from `digital_twin.state` and is updated in server memory by operational telemetry requests. Supplier availability and capacity gate candidate options, and the latest supplier performance scores feed the next assessment.
 - Decision records capture the actual selected option alongside the modeled top choice, selected-option probability, and twin revision at decision time.
 - Outcomes can carry validated twin updates, linking observed results back to the evolving representation. Updating the twin directly is also supported through the dashboard.
-- Twin state, event history, decisions, and outcomes are in-memory prototype data and reset when the backend restarts. No live WMS, ERP, TMS, supplier, or IoT feeds are connected.
+- Twin state and its operational update event list are in-memory and reset when the backend restarts. Interactive human decisions and outcomes are persisted in PostgreSQL and represented in the context graph. No live WMS, ERP, TMS, supplier, or IoT feeds are connected.
 
 Let's take a practical example from Supply Chain Management: A sudden supplier disruption during a high-demand period.
 

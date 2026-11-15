@@ -137,7 +137,7 @@ function App() {
           </section>
 
           <nav className="stage-nav layer-nav">
-            {[["1", "Physical supply chain"], ["2", "Digital twin"], ["3", "Decision pipeline"], ["4", "Decision feedback"]].map(([num, label]) =>
+            {[["1", "Physical supply chain"], ["2", "Digital twin"], ["3", "Decision pipeline"], ["4", "Decision feedback"], ["5", "Knowledge graph"]].map(([num, label]) =>
               <button key={num} className={activeLayer === Number(num) ? "active" : ""} onClick={() => setActiveLayer(Number(num))}>
                 <b>{num}</b><span>{label}</span>
               </button>
@@ -159,6 +159,7 @@ function App() {
             {result && activeStage === 3 && <StageThree result={result} temperature={temperature} setTemperature={(value) => { setTemperature(value); runAssessment(value); }} trainingEvaluation={trainingEvaluation} scenarioId={selectedScenario} />}
           </>}
           {activeLayer === 4 && <FeedbackLayer data={data} result={result} records={feedback} onChanged={refreshFeedback} scenarioId={selectedScenario} />}
+          {activeLayer === 5 && <KnowledgeGraphLayer scenarioId={selectedScenario} />}
           <footer>
             <span>DIGITAL TWIN / MOCK OPERATIONAL DATA</span>
             <span>Illustrative decision support · Human decision remains final</span>
@@ -167,6 +168,105 @@ function App() {
       )}
     </main>
   );
+}
+
+function KnowledgeGraphLayer({ scenarioId }) {
+  const [graph, setGraph] = useState(null);
+  const [focusedNode, setFocusedNode] = useState(null);
+  const [neighbors, setNeighbors] = useState(null);
+  const [contextName, setContextName] = useState("");
+  const [contextType, setContextType] = useState("external_condition");
+  const [contextDescription, setContextDescription] = useState("");
+  const [notice, setNotice] = useState("");
+  const [error, setError] = useState("");
+
+  async function loadGraph() {
+    const response = await fetch(`/api/context-graph?scenario_id=${encodeURIComponent(scenarioId)}&depth=5`);
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.detail ?? "Context graph could not be loaded.");
+    setGraph(body);
+    setFocusedNode(body.root);
+    setNeighbors(null);
+  }
+
+  useEffect(() => {
+    setError("");
+    loadGraph().catch(loadError => setError(loadError.message));
+  }, [scenarioId]);
+
+  async function inspectNode(nodeId) {
+    setError("");
+    setFocusedNode(nodeId);
+    const response = await fetch(`/api/context-graph/nodes/${encodeURIComponent(nodeId)}/neighbors?depth=1`);
+    const body = await response.json();
+    if (!response.ok) {
+      setError(body.detail ?? "Node relationships could not be loaded.");
+      return;
+    }
+    setNeighbors(body);
+  }
+
+  async function addContext(event) {
+    event.preventDefault();
+    setError("");
+    setNotice("");
+    const response = await fetch("/api/context-graph/nodes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        node_id: `${scenarioId}:context:${Date.now()}`,
+        name: contextName,
+        context_type: contextType,
+        situation_id: scenarioId,
+        properties: { description: contextDescription },
+        provenance: "dashboard:user-entered"
+      })
+    });
+    const body = await response.json();
+    if (!response.ok) {
+      setError(body.detail ?? "Context node could not be saved.");
+      return;
+    }
+    setNotice(`Added context node and HAS_CONTEXT relationship (${body.connected_to}).`);
+    setContextName("");
+    setContextDescription("");
+    await loadGraph();
+  }
+
+  const selectedNode = neighbors?.node ?? graph?.nodes.find(node => node.id === focusedNode);
+  return <>
+    <section className="section-heading"><div><div className="eyebrow">KNOWLEDGE & MEMORY LAYER</div><h2>Bidirectional context graph</h2></div><div className="badge">POSTGRESQL + NETWORKX</div></section>
+    <p className="intro">Explore how this situation connects to parameters, alternatives, criteria, preferences, assessments, predictions, decisions, context, and outcomes. Relationships are stored once with their semantic direction and can be traversed from either endpoint.</p>
+    <section className="panel graph-metrics"><div><span className="eyebrow">NODES IN SCENARIO GRAPH</span><b>{graph?.node_count ?? "…"}</b></div><div><span className="eyebrow">RELATIONSHIPS</span><b>{graph?.relationship_count ?? "…"}</b></div><div><span className="eyebrow">TRAVERSAL</span><b>Bidirectional</b></div></section>
+    {error && <div className="error">{error}</div>}
+    {notice && <p className="success-message">{notice}</p>}
+    <div className="two-col graph-columns">
+      <section className="panel">
+        <h3>Scenario nodes</h3>
+        <p className="hint">Select any node to inspect its immediate incoming and outgoing connections.</p>
+        <div className="graph-node-list">{graph?.nodes.map(node => <button key={node.id} className={`graph-node ${focusedNode === node.id ? "selected" : ""}`} onClick={() => inspectNode(node.id)}><span className="graph-node-type">{node.type}</span><b>{node.name}</b></button>)}</div>
+      </section>
+      <section className="panel">
+        <h3>{selectedNode ? "Relationships" : "Loading graph…"}</h3>
+        {selectedNode && <div className="graph-focused"><span className="graph-node-type">{selectedNode.type}</span><b>{selectedNode.name}</b><small>Provenance: {selectedNode.provenance ?? "unknown"}</small></div>}
+        {(neighbors?.relationships ?? []).map(relationship => <div className="graph-edge" key={relationship.id}><b>{relationship.type}</b><span>{relationship.source} ↔ {relationship.target}</span><small>{relationship.traversal_direction} from selected node · {relationship.provenance}</small>{Object.keys(relationship.properties ?? {}).length > 0 && <code>{JSON.stringify(relationship.properties)}</code>}</div>)}
+        {!neighbors && <p className="hint">Select a graph node to inspect its connections.</p>}
+      </section>
+    </div>
+    <section className="panel"><h3>Similar historical situations</h3><div className="cards">{graph?.relationships.filter(relationship => relationship.type === "SIMILAR_TO").map(relationship => {
+      const relatedId = relationship.source === graph.root ? relationship.target : relationship.source;
+      const related = graph.nodes.find(node => node.id === relatedId);
+      return <article className="data-card" key={relationship.id}><span className="eyebrow">SIMILAR_TO · score {relationship.properties.score}</span><h4>{related?.name ?? relatedId}</h4><p>{related?.properties.decision_conflict}</p><small>{relationship.provenance}</small></article>;
+    })}</div></section>
+    <section className="panel"><h3>Add operational context</h3><p className="hint">Attach a constraint, event, policy, external condition, evidence item, or data source to the current situation. The node and HAS_CONTEXT relation are persisted in PostgreSQL.</p>
+      <form className="update-form" onSubmit={addContext}>
+        <label>Context name<input value={contextName} onChange={event => setContextName(event.target.value)} required /></label>
+        <label>Context type<select value={contextType} onChange={event => setContextType(event.target.value)}><option value="constraint">Constraint</option><option value="event">Event</option><option value="policy">Policy</option><option value="external_condition">External condition</option><option value="evidence">Evidence</option><option value="source">Source</option></select></label>
+        <label>Details<input value={contextDescription} onChange={event => setContextDescription(event.target.value)} /></label>
+        <button type="submit" className="primary-button">Add context node</button>
+      </form>
+    </section>
+  </>;
 }
 
 function PhysicalLayer({ physical, options }) {

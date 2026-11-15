@@ -30,4 +30,4 @@ The `/api/training/evaluation` endpoint reports top-choice agreement, multiclass
 
 Select one of the eight scenarios in the dashboard. Its operational context and alternatives feed the existing three-stage pipeline. Stage 3 displays that scenario's four recorded choices and outcomes alongside descriptive evaluation metrics across all 32 records. The API also exposes the underlying joined decision data.
 
-The normal decision-feedback forms remain separate from this static fixture; interactive feedback is in-memory and resets when the backend restarts.
+The normal decision-feedback forms remain separate from this static fixture; interactive decisions and outcomes are persisted in PostgreSQL and linked into the context graph.

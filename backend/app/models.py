@@ -133,3 +133,55 @@ class Outcome(Base, TimestampMixin):
     actual_observed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     observed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     decision: Mapped["Decision"] = relationship(back_populates="outcome")
+
+class ContextNode(Base, TimestampMixin):
+    __tablename__ = "context_graph_nodes"
+    __table_args__ = (
+        Index("ix_context_nodes_type", "node_type"),
+        Index("ix_context_nodes_synthetic", "is_synthetic"),
+    )
+    node_key: Mapped[str] = mapped_column(String(180), primary_key=True)
+    node_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    name: Mapped[str] = mapped_column(String(250), nullable=False)
+    properties: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    provenance: Mapped[Optional[str]] = mapped_column(String(500))
+    is_synthetic: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    outgoing_relationships: Mapped[list["ContextRelationship"]] = relationship(
+        foreign_keys="ContextRelationship.source_node_key",
+        back_populates="source",
+        cascade="all, delete-orphan",
+    )
+    incoming_relationships: Mapped[list["ContextRelationship"]] = relationship(
+        foreign_keys="ContextRelationship.target_node_key",
+        back_populates="target",
+        cascade="all, delete-orphan",
+    )
+
+class ContextRelationship(Base):
+    __tablename__ = "context_graph_relationships"
+    __table_args__ = (
+        UniqueConstraint("source_node_key", "target_node_key", "relationship_type", name="uq_context_relationship_edge"),
+        Index("ix_context_relationship_type", "relationship_type"),
+        Index("ix_context_relationship_target", "target_node_key"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    source_node_key: Mapped[str] = mapped_column(
+        ForeignKey("context_graph_nodes.node_key", ondelete="CASCADE"),
+        nullable=False,
+    )
+    target_node_key: Mapped[str] = mapped_column(
+        ForeignKey("context_graph_nodes.node_key", ondelete="CASCADE"),
+        nullable=False,
+    )
+    relationship_type: Mapped[str] = mapped_column(String(60), nullable=False)
+    properties: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    provenance: Mapped[Optional[str]] = mapped_column(String(500))
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    source: Mapped["ContextNode"] = relationship(
+        foreign_keys=[source_node_key],
+        back_populates="outgoing_relationships",
+    )
+    target: Mapped["ContextNode"] = relationship(
+        foreign_keys=[target_node_key],
+        back_populates="incoming_relationships",
+    )

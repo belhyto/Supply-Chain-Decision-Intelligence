@@ -3,8 +3,15 @@ from copy import deepcopy
 from unittest.mock import patch
 
 from fastapi import HTTPException
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session
+from sqlalchemy.pool import StaticPool
 
 from app import main
+from app.context_graph import seed_context_graph
+from app.database import Base
+from app.context_graph import graph_snapshot
+from app.models import DecisionEvent, Outcome
 
 
 class AssessmentTests(unittest.TestCase):
@@ -142,32 +149,67 @@ class AssessmentTests(unittest.TestCase):
         self.assertEqual(result["operational_snapshot"]["twin_revision"], 2)
 
     def test_decision_outcome_can_apply_operational_twin_update(self):
-        with (
-            patch.object(main, "TWIN_STATE", deepcopy(main.TWIN_STATE)),
-            patch.object(main, "TWIN_EVENTS", []),
-            patch.object(main, "DECISION_FEEDBACK", []),
-        ):
-            decision = main.record_decision(main.DecisionFeedbackRequest(
-                decision_maker_id="DM-01",
-                chosen_option_id="SUP-A",
-                rationale="Selected for demonstration.",
+        engine = create_engine(
+            "sqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        Base.metadata.create_all(engine)
+        db = Session(engine)
+        try:
+            seed_context_graph(db, main.TRAINING_DATA, main.CRITERIA)
+            with patch.object(main, "TWIN_STATE", deepcopy(main.TWIN_STATE)), patch.object(main, "TWIN_EVENTS", []):
+                decision = main.create_persisted_decision(
+                    db,
+                    main.DecisionFeedbackRequest(
+                        scenario_id="SCN-001",
+                        decision_maker_id="DM-01",
+                        chosen_option_id="SUP-A",
+                        rationale="Selected for demonstration.",
+                    ),
+                )
+                updated = main.persist_decision_outcome(
+                    db,
+                    decision["id"],
+                    main.OutcomeFeedbackRequest(
+                        status="delayed",
+                        notes="Observed delivery took longer than estimated.",
+                        twin_updates=[
+                            main.TwinUpdateRequest(
+                                source="observed outcome",
+                                entity_type="shipment",
+                                entity_id="SHP-2026-3402",
+                                field="estimated_delivery_days",
+                                value=4,
+                            )
+                        ],
+                    ),
+                )
+            stored_event = db.scalars(
+                select(DecisionEvent).where(DecisionEvent.event_context["public_decision_id"].as_string() == decision["id"])
+            ).one()
+            stored_outcome = db.scalars(
+                select(Outcome).where(Outcome.decision_id == stored_event.decision.id)
+            ).one()
+            self.assertEqual(stored_outcome.status, "delayed")
+            self.assertTrue(stored_outcome.actual_observed)
+            feedback_rows = main.persisted_feedback_records(db)
+            self.assertEqual(len(feedback_rows), 1)
+            self.assertEqual(feedback_rows[0]["id"], decision["id"])
+            self.assertEqual(feedback_rows[0]["outcome"]["status"], "delayed")
+            graph = graph_snapshot(db, "SCN-001", depth=5)
+            self.assertTrue(any(
+                edge["type"] == "SELECTED" and edge["provenance"] == "observed_human:dashboard"
+                for edge in graph["relationships"]
             ))
-            updated = main.record_decision_outcome(
-                decision["id"],
-                main.OutcomeFeedbackRequest(
-                    status="delayed",
-                    notes="Observed delivery took longer than estimated.",
-                    twin_updates=[
-                        main.TwinUpdateRequest(
-                            source="observed outcome",
-                            entity_type="shipment",
-                            entity_id="SHP-2026-3402",
-                            field="estimated_delivery_days",
-                            value=4,
-                        )
-                    ],
-                ),
-            )
+            self.assertTrue(any(
+                edge["type"] == "RESULTED_IN" and edge["provenance"] == "observed_human:dashboard"
+                for edge in graph["relationships"]
+            ))
+        finally:
+            db.close()
+            Base.metadata.drop_all(engine)
+            engine.dispose()
 
         self.assertEqual(updated["outcome"]["status"], "delayed")
         self.assertEqual(updated["outcome"]["twin_updates"][0]["value"], 4)

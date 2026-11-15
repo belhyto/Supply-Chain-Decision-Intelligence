@@ -5,14 +5,38 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Literal
+from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from sqlalchemy import text
-from app.database import engine
+from sqlalchemy import func, select, text
+from sqlalchemy.orm import Session
+
+from app.context_graph import (
+    RELATIONSHIP_TYPES,
+    add_node,
+    add_relationship,
+    graph_snapshot,
+    neighbors,
+    node_key,
+    seed_context_graph,
+    similar_situations,
+)
+from app.database import SessionLocal, engine, get_db
 from app.init_db import create_tables
+from app.models import (
+    Alternative,
+    ContextNode,
+    ContextRelationship,
+    Decision,
+    DecisionEvent,
+    DecisionMaker,
+    Outcome,
+    Prediction,
+    Preference,
+)
 
 CONFIG_PATH = Path(__file__).parent / "config" / "decision_pipeline.json"
 TRAINING_DATA_PATH = Path(__file__).parent.parent / "data" / "training"
@@ -61,7 +85,6 @@ CRITERION_ORDER = [criterion["key"] for criterion in CRITERIA]
 CRITERION_KEYS = {criterion["key"] for criterion in CRITERIA}
 TWIN_STATE = deepcopy(CONFIG["digital_twin"]["state"])
 TWIN_EVENTS: list[dict] = []
-DECISION_FEEDBACK: list[dict] = []
 
 
 def read_csv_rows(filename: str) -> list[dict]:
@@ -186,6 +209,8 @@ app.add_middleware(
 @app.on_event("startup")
 def startup_event():
     create_tables()
+    with SessionLocal() as db:
+        seed_context_graph(db, TRAINING_DATA, CRITERIA)
 
 
 class PreferenceProfile(BaseModel):
@@ -219,6 +244,23 @@ class OutcomeFeedbackRequest(BaseModel):
     status: Literal["fulfilled", "delayed", "failed", "partial"]
     notes: str = Field(default="", max_length=1000)
     twin_updates: List[TwinUpdateRequest] = Field(default_factory=list)
+
+
+class ContextNodeRequest(BaseModel):
+    node_id: str = Field(min_length=1, max_length=120)
+    name: str = Field(min_length=1, max_length=250)
+    context_type: Literal["constraint", "event", "policy", "external_condition", "evidence", "source"]
+    situation_id: str
+    properties: Dict[str, Any] = Field(default_factory=dict)
+    provenance: str = Field(min_length=1, max_length=500)
+
+
+class ContextRelationshipRequest(BaseModel):
+    source_node_id: str
+    target_node_id: str
+    relationship_type: str
+    properties: Dict[str, Any] = Field(default_factory=dict)
+    provenance: str = Field(min_length=1, max_length=500)
 
 
 TWIN_UPDATE_FIELDS = {
@@ -634,6 +676,122 @@ def get_physical_network():
     return CONFIG["physical_network"]
 
 
+@app.get("/api/context-graph")
+def get_context_graph(
+    scenario_id: str | None = None,
+    depth: int = 3,
+    db: Session = Depends(get_db),
+):
+    if depth < 1 or depth > 5:
+        raise HTTPException(status_code=422, detail="Graph depth must be between 1 and 5.")
+    if scenario_id and scenario_id not in TRAINING_DATA["scenarios"]:
+        raise HTTPException(status_code=404, detail=f"Unknown scenario ID: {scenario_id}")
+    return graph_snapshot(db, scenario_id, depth)
+
+
+@app.get("/api/context-graph/nodes/{node_id}/neighbors")
+def get_context_neighbors(
+    node_id: str,
+    depth: int = 1,
+    db: Session = Depends(get_db),
+):
+    if depth < 1 or depth > 5:
+        raise HTTPException(status_code=422, detail="Graph depth must be between 1 and 5.")
+    result = neighbors(db, node_id, depth)
+    if result["node"] is None:
+        raise HTTPException(status_code=404, detail=f"Unknown context graph node: {node_id}")
+    return result
+
+
+@app.get("/api/context-graph/similar/{scenario_id}")
+def get_similar_situations(
+    scenario_id: str,
+    limit: int = 5,
+    db: Session = Depends(get_db),
+):
+    if scenario_id not in TRAINING_DATA["scenarios"]:
+        raise HTTPException(status_code=404, detail=f"Unknown scenario ID: {scenario_id}")
+    if limit < 1 or limit > 20:
+        raise HTTPException(status_code=422, detail="Limit must be between 1 and 20.")
+    return similar_situations(db, scenario_id, limit)
+
+
+@app.post("/api/context-graph/nodes", status_code=201)
+def create_context_node(request: ContextNodeRequest, db: Session = Depends(get_db)):
+    situation_key = node_key("Situation", request.situation_id)
+    if db.get(ContextNode, situation_key) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown situation ID: {request.situation_id}")
+    context_key = node_key("Context", request.node_id)
+    if db.get(ContextNode, context_key) is not None:
+        raise HTTPException(status_code=409, detail=f"Context node already exists: {request.node_id}")
+    add_node(
+        db,
+        context_key,
+        "Context",
+        request.name,
+        {**request.properties, "context_type": request.context_type, "situation_id": request.situation_id},
+        request.provenance,
+    )
+    add_relationship(
+        db,
+        situation_key,
+        context_key,
+        "HAS_CONTEXT",
+        {"context_type": request.context_type},
+        request.provenance,
+    )
+    db.commit()
+    return {
+        "node": {
+            "id": context_key,
+            "type": "Context",
+            "name": request.name,
+            "properties": {**request.properties, "context_type": request.context_type, "situation_id": request.situation_id},
+            "provenance": request.provenance,
+        },
+        "connected_to": situation_key,
+        "relationship": "HAS_CONTEXT",
+        "bidirectional_traversal": True,
+    }
+
+
+@app.post("/api/context-graph/relationships", status_code=201)
+def create_context_relationship(
+    request: ContextRelationshipRequest,
+    db: Session = Depends(get_db),
+):
+    if request.relationship_type not in RELATIONSHIP_TYPES:
+        raise HTTPException(status_code=422, detail="Unsupported context graph relationship type.")
+    if request.source_node_id == request.target_node_id:
+        raise HTTPException(status_code=422, detail="A relationship must connect two different nodes.")
+    if db.get(ContextNode, request.source_node_id) is None or db.get(ContextNode, request.target_node_id) is None:
+        raise HTTPException(status_code=404, detail="Both context graph nodes must exist.")
+    relationship = db.query(ContextRelationship).filter_by(
+        source_node_key=request.source_node_id,
+        target_node_key=request.target_node_id,
+        relationship_type=request.relationship_type,
+    ).first()
+    if relationship:
+        raise HTTPException(status_code=409, detail="This context graph relationship already exists.")
+    add_relationship(
+        db,
+        request.source_node_id,
+        request.target_node_id,
+        request.relationship_type,
+        request.properties,
+        request.provenance,
+    )
+    db.commit()
+    return {
+        "source": request.source_node_id,
+        "target": request.target_node_id,
+        "type": request.relationship_type,
+        "properties": request.properties,
+        "provenance": request.provenance,
+        "bidirectional_traversal": True,
+    }
+
+
 @app.get("/api/twin")
 def get_digital_twin():
     return {
@@ -649,12 +807,11 @@ def update_digital_twin(request: TwinUpdateRequest):
 
 
 @app.get("/api/feedback")
-def get_decision_feedback():
-    return {"records": deepcopy(DECISION_FEEDBACK)}
+def get_decision_feedback(db: Session = Depends(get_db)):
+    return {"records": persisted_feedback_records(db)}
 
 
-@app.post("/api/feedback/decisions")
-def record_decision(request: DecisionFeedbackRequest):
+def create_persisted_decision(db: Session, request: DecisionFeedbackRequest) -> dict:
     assessment = calculate_assessment(AssessRequest(scenario_id=request.scenario_id))
     person = next(
         (item for item in assessment["stage3"]["decision_maker_probabilities"] if item["decision_maker_id"] == request.decision_maker_id),
@@ -667,42 +824,285 @@ def record_decision(request: DecisionFeedbackRequest):
         None,
     )
     if option is None:
-        raise HTTPException(status_code=422, detail="Chosen option is not currently available in the digital twin.")
-    record = {
-        "id": f"DEC-{len(DECISION_FEEDBACK) + 1:04d}",
-        "timestamp": current_timestamp(),
-        "scenario_id": assessment["scenario_id"],
-        "scenario_title": assessment["scenario"]["title"],
-        "decision_maker_id": request.decision_maker_id,
-        "decision_maker_name": person["decision_maker_name"],
-        "chosen_option_id": option["option_id"],
-        "chosen_option_name": option["option_name"],
-        "predicted_choice": person["most_likely_choice"],
-        "predicted_choice_probability_percent": person["most_likely_choice_probability_percent"],
-        "chosen_option_probability_percent": option["probability_percent"],
-        "choice_matches_prediction": option["option_name"] == person["most_likely_choice"],
-        "rationale": request.rationale,
-        "twin_revision": assessment["operational_snapshot"]["twin_revision"],
-        "outcome": None,
-    }
-    DECISION_FEEDBACK.insert(0, record)
-    return record
+        raise HTTPException(status_code=422, detail="Chosen option is not currently available in the assessment.")
 
+    scenario_id = assessment["scenario_id"]
+    public_id = f"DEC-{uuid4().hex[:12].upper()}"
+    event_id = f"{scenario_id}:{request.decision_maker_id}:actual:{uuid4().hex}"
+    latest_event_number = db.scalar(
+        select(func.max(DecisionEvent.event_number)).where(
+            DecisionEvent.situation_id == scenario_id,
+            DecisionEvent.decision_maker_id == request.decision_maker_id,
+        )
+    ) or 0
+    preference = db.scalar(
+        select(Preference).where(
+            Preference.decision_maker_id == request.decision_maker_id,
+            Preference.is_current.is_(True),
+        )
+    )
+    event = DecisionEvent(
+        id=event_id,
+        situation_id=scenario_id,
+        decision_maker_id=request.decision_maker_id,
+        preference_id=preference.id if preference else None,
+        event_number=latest_event_number + 1,
+        status="decided",
+        event_context={
+            "source": "interactive",
+            "public_decision_id": public_id,
+            "scenario_id": scenario_id,
+            "event_number": latest_event_number + 1,
+            "twin_revision": assessment["operational_snapshot"]["twin_revision"],
+        },
+    )
+    db.add(event)
+    db.flush()
+
+    event_key = node_key("DecisionEvent", event_id)
+    scenario_key = node_key("Situation", scenario_id)
+    preference_key = node_key("Preference", request.decision_maker_id)
+    add_node(
+        db,
+        event_key,
+        "DecisionEvent",
+        f"{person['decision_maker_name']} decision for {scenario_id}",
+        event.event_context,
+        "observed_human:dashboard",
+    )
+    add_relationship(db, scenario_key, event_key, "HAS_DECISION_EVENT", provenance="observed_human:dashboard")
+    if db.get(ContextNode, preference_key):
+        add_relationship(db, event_key, preference_key, "INFLUENCED_BY", {"factor": "decision-maker preference"}, "observed_human:dashboard")
+
+    for prediction in person["probabilities"]:
+        alternative_id = f"{scenario_id}:{prediction['option_id']}"
+        db.add(Prediction(
+            decision_event_id=event_id,
+            alternative_id=alternative_id,
+            utility_score=prediction["utility_score"],
+            probability=prediction["probability_percent"] / 100,
+            model_name="illustrative_softmax",
+            model_version=f"interactive-{public_id}",
+            explanation="Illustrative model estimate at decision time.",
+        ))
+        prediction_key = node_key("Prediction", f"{event_id}:{prediction['option_id']}")
+        alternative_key = node_key("Alternative", alternative_id)
+        add_node(
+            db,
+            prediction_key,
+            "Prediction",
+            f"Predicted probability for {prediction['option_name']}",
+            {
+                "probability": prediction["probability_percent"] / 100,
+                "utility_score": prediction["utility_score"],
+                "model_version": f"interactive-{public_id}",
+            },
+            "model:illustrative_softmax",
+        )
+        add_relationship(
+            db,
+            event_key,
+            prediction_key,
+            "HAS_PREDICTION",
+            {"probability": prediction["probability_percent"] / 100},
+            "model:illustrative_softmax",
+        )
+        add_relationship(
+            db,
+            prediction_key,
+            alternative_key,
+            "EVALUATES",
+            {"probability": prediction["probability_percent"] / 100},
+            "model:illustrative_softmax",
+        )
+        if prediction["option_name"] == person["most_likely_choice"]:
+            add_relationship(
+                db,
+                event_key,
+                prediction_key,
+                "PREDICTED_AS",
+                {"probability": prediction["probability_percent"] / 100},
+                "model:illustrative_softmax",
+            )
+            add_relationship(
+                db,
+                prediction_key,
+                alternative_key,
+                "PREDICTED_AS",
+                {"probability": prediction["probability_percent"] / 100},
+                "model:illustrative_softmax",
+            )
+
+    alternative_id = f"{scenario_id}:{option['option_id']}"
+    if db.get(Alternative, alternative_id) is None:
+        raise HTTPException(status_code=422, detail="Chosen option is not stored for this situation.")
+    decision = Decision(
+        decision_event_id=event_id,
+        chosen_alternative_id=alternative_id,
+        rationale=request.rationale,
+        label_source="observed_human",
+        confidence_note=public_id,
+    )
+    db.add(decision)
+    db.flush()
+    decision_key = node_key("Decision", public_id)
+    add_node(
+        db,
+        decision_key,
+        "Decision",
+        f"{person['decision_maker_name']} selected {option['option_name']}",
+        {
+            "scenario_id": scenario_id,
+            "decision_maker_id": request.decision_maker_id,
+            "recorded_choice_id": option["option_id"],
+            "rationale": request.rationale,
+            "label_source": "observed_human",
+        },
+        "observed_human:dashboard",
+    )
+    add_relationship(db, event_key, decision_key, "HAS_DECISION", provenance="observed_human:dashboard")
+    add_relationship(
+        db,
+        decision_key,
+        node_key("Alternative", alternative_id),
+        "SELECTED",
+        {"rationale": request.rationale},
+        "observed_human:dashboard",
+    )
+    db.commit()
+    return feedback_record(event, decision)
+
+def feedback_record(event: DecisionEvent, decision: Decision) -> dict:
+    event_context = event.event_context or {}
+    predictions = [
+        prediction for prediction in event.predictions
+        if prediction.model_version.startswith("interactive-")
+    ]
+    predicted = max(predictions, key=lambda prediction: prediction.probability) if predictions else None
+    predicted_name = predicted.alternative.name if predicted else None
+    chosen = decision.chosen_alternative
+    chosen_prediction = next(
+        (prediction for prediction in predictions if prediction.alternative_id == chosen.id),
+        None,
+    )
+    outcome = decision.outcome
+    return {
+        "id": decision.confidence_note or f"DEC-{decision.id}",
+        "timestamp": decision.decided_at.isoformat(),
+        "scenario_id": event.situation_id,
+        "scenario_title": event.situation.title,
+        "decision_maker_id": event.decision_maker_id,
+        "decision_maker_name": event.decision_maker.name,
+        "chosen_option_id": chosen.code,
+        "chosen_option_name": chosen.name,
+        "predicted_choice": predicted_name,
+        "predicted_choice_probability_percent": round(predicted.probability * 100, 1) if predicted else 0,
+        "chosen_option_probability_percent": round(chosen_prediction.probability * 100, 1) if chosen_prediction else 0,
+        "choice_matches_prediction": chosen.id == predicted.alternative_id if predicted else False,
+        "rationale": decision.rationale or "",
+        "twin_revision": event_context.get("twin_revision", 0),
+        "outcome": {
+            "status": outcome.status,
+            "notes": outcome.summary or "",
+            "recorded_at": outcome.observed_at.isoformat() if outcome.observed_at else outcome.updated_at.isoformat(),
+            "twin_updates": (outcome.metrics or {}).get("twin_updates", []),
+        } if outcome else None,
+    }
+
+
+def persisted_feedback_records(db: Session) -> list[dict]:
+    events = db.scalars(select(DecisionEvent).order_by(DecisionEvent.created_at.desc())).all()
+    records = [
+        feedback_record(event, event.decision)
+        for event in events
+        if (event.event_context or {}).get("source") == "interactive" and event.decision is not None
+    ]
+    return records
+
+
+@app.post("/api/feedback/decisions")
+def record_decision(request: DecisionFeedbackRequest, db: Session = Depends(get_db)):
+    return create_persisted_decision(db, request)
 
 @app.post("/api/feedback/decisions/{decision_id}/outcome")
-def record_decision_outcome(decision_id: str, request: OutcomeFeedbackRequest):
-    record = next((item for item in DECISION_FEEDBACK if item["id"] == decision_id), None)
-    if record is None:
+def record_decision_outcome(
+    decision_id: str,
+    request: OutcomeFeedbackRequest,
+    db: Session = Depends(get_db),
+):
+    return persist_decision_outcome(db, decision_id, request)
+
+
+def persist_decision_outcome(
+    db: Session,
+    decision_id: str,
+    request: OutcomeFeedbackRequest,
+) -> dict:
+    events = db.scalars(select(DecisionEvent)).all()
+    event = next(
+        (
+            item for item in events
+            if (item.event_context or {}).get("public_decision_id") == decision_id
+            and item.decision is not None
+        ),
+        None,
+    )
+    if event is None:
         raise HTTPException(status_code=404, detail=f"Unknown decision ID: {decision_id}")
 
     applied_events = [apply_twin_update(update) for update in request.twin_updates]
-    record["outcome"] = {
-        "status": request.status,
-        "notes": request.notes,
-        "recorded_at": current_timestamp(),
-        "twin_updates": applied_events,
-    }
-    return record
+    decision = event.decision
+    outcome = decision.outcome
+    if outcome is None:
+        outcome = Outcome(decision_id=decision.id)
+        db.add(outcome)
+    outcome.status = request.status
+    outcome.summary = request.notes
+    outcome.metrics = {"twin_updates": applied_events}
+    outcome.actual_observed = True
+    outcome.observed_at = datetime.now(timezone.utc)
+    outcome_key = node_key("Outcome", decision_id)
+    add_node(
+        db,
+        outcome_key,
+        "Outcome",
+        f"{request.status.title()} outcome for {decision_id}",
+        {
+            "status": request.status,
+            "summary": request.notes,
+            "actual_observed": True,
+            "twin_updates": applied_events,
+        },
+        "observed_human:dashboard",
+    )
+    add_relationship(
+        db,
+        node_key("Decision", decision_id),
+        outcome_key,
+        "RESULTED_IN",
+        {"status": request.status},
+        "observed_human:dashboard",
+    )
+    for index, twin_update in enumerate(applied_events):
+        context_key = node_key("Context", f"{decision_id}:outcome-update:{index}")
+        add_node(
+            db,
+            context_key,
+            "Context",
+            f"Observed operational update: {twin_update['entity_id']} {twin_update['field']}",
+            {"context_type": "event", **twin_update},
+            "observed_human:outcome",
+        )
+        add_relationship(
+            db,
+            outcome_key,
+            context_key,
+            "INFLUENCED_BY",
+            {"factor": "observed operational update"},
+            "observed_human:outcome",
+        )
+    db.commit()
+    return feedback_record(event, decision)
 
 @app.get("/api/db-test")
 def test_database():
