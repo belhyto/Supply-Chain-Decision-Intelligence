@@ -8,14 +8,17 @@ This fixture is synthetic. It is intended for exercising scenario selection, sui
 - 3 supplier alternatives per scenario (24 rows)
 - 4 decision-maker profiles
 - 32 recorded decisions (one per scenario/profile pair)
-- 32 corresponding observed-outcome examples (one per decision)
+- 24 suitability assessments and 96 alternative-level choice probabilities when seeded to PostgreSQL
+- 32 corresponding synthetic outcome examples (one per decision)
+
+`SCN-001` is the supplier-disruption example: 30% demand increase, five inventory days, a 20-day inventory target, a seven-day delivery deadline, and a ₹20 lakh budget. Its three suitability scores are 75.25, 82.25, and 82.25. Its decision probabilities are supplied illustrative values and are not calibrated human-behavior predictions.
 
 ## Files and keys
 
 - `scenarios.csv`: situation, decision conflict, demand/lead-time parameters, and operational criterion weights. Primary key: `scenario_id`.
 - `options.csv`: per-scenario supplier availability, 0-100 criterion scores, attributes, and notes. Composite key: `scenario_id`, `option_id`. JSON-valued cells use RFC 4180 CSV escaping.
 - `decision_maker_profiles.csv`: the four illustrative profiles and cost/reliability/speed/risk preference weights. Primary key: `decision_maker_id`. Each profile's weights sum to 1.
-- `decisions.csv`: the selected option and rationale for each person/scenario pair. Primary key: `decision_id`; includes `scenario_id`, `decision_maker_id`, and `recorded_choice_id`.
+- `decisions.csv`: the selected option and rationale for each person/scenario pair. Primary key: `decision_id`; includes `scenario_id`, `decision_maker_id`, and `recorded_choice_id`. `predicted_probabilities_json` optionally provides an explicitly illustrative distribution; otherwise the seed computes a softmax distribution.
 - `outcomes.csv`: outcome details joined to decisions by `decision_id`; includes fulfillment status, actual delivery days, cost variance, stockout units, and notes.
 
 The pipeline keeps three concepts separate:
@@ -31,3 +34,13 @@ The `/api/training/evaluation` endpoint reports top-choice agreement, multiclass
 Select one of the eight scenarios in the dashboard. Its operational context and alternatives feed the existing three-stage pipeline. Stage 3 displays that scenario's four recorded choices and outcomes alongside descriptive evaluation metrics across all 32 records. The API also exposes the underlying joined decision data.
 
 The normal decision-feedback forms remain separate from this static fixture; interactive decisions and outcomes are persisted in PostgreSQL and linked into the context graph.
+
+## Seed PostgreSQL
+
+From the `backend` directory, with `DATABASE_URL` configured in `backend/.env`, run:
+
+```powershell
+python seed_postgresql.py
+```
+
+The script creates any missing tables, adds the `data_source` column to existing PostgreSQL tables when needed, and upserts the synthetic fixture in foreign-key order. It is safe to rerun: the scenario, profile, assessment, event, prediction, decision, outcome, and graph records use stable identifiers or uniqueness keys. Seeded records use `data_source = "synthetic"`; outcomes remain marked `actual_observed = false`. The script verifies the expected dataset counts before reporting success.

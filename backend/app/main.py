@@ -98,6 +98,21 @@ def load_training_data() -> dict:
         scenario_id = row["scenario_id"]
         if scenario_id in scenarios:
             raise ValueError(f"Duplicate training scenario ID: {scenario_id}")
+        additional_parameters = {}
+        for key in (
+            "demand_increase_percent",
+            "current_inventory_days",
+            "required_inventory_days",
+            "available_budget_lakh",
+            "threat_level",
+        ):
+            value = row.get(key, "").strip()
+            if value:
+                additional_parameters[key] = (
+                    value if key == "threat_level"
+                    else float(value) if key == "available_budget_lakh"
+                    else int(value)
+                )
         scenarios[scenario_id] = {
             "id": scenario_id,
             "title": row["title"],
@@ -109,13 +124,16 @@ def load_training_data() -> dict:
             "location": row["location"],
             "product": row["product"],
             "operational_weights": json.loads(row["operational_weights_json"]),
+            "additional_parameters": additional_parameters,
             "context": {
                 "Product": row["product"],
                 "Required quantity": f"{int(row['required_units']):,} units",
                 "Required within": f"{row['required_within_days']} days",
                 "Stockout risk": row["stockout_risk"],
                 "Location": row["location"],
+                **additional_parameters,
             },
+            "data_source": "synthetic",
             "options": [],
         }
 
@@ -170,6 +188,19 @@ def load_training_data() -> dict:
         option_ids = {option["id"] for option in scenarios[decision["scenario_id"]]["options"]}
         if decision["recorded_choice_id"] not in option_ids:
             raise ValueError(f"Training decision {decision['decision_id']} references an unknown option.")
+        raw_probabilities = decision.get("predicted_probabilities_json", "")
+        if raw_probabilities:
+            probabilities = json.loads(raw_probabilities)
+            if set(probabilities) != option_ids or any(
+                not isinstance(probability, (int, float))
+                or not math.isfinite(probability)
+                or not 0 <= probability <= 1
+                for probability in probabilities.values()
+            ) or not math.isclose(sum(probabilities.values()), 1, abs_tol=1e-6):
+                raise ValueError(
+                    f"Training decision {decision['decision_id']} must define a valid probability distribution for every option."
+                )
+            decision["predicted_probabilities"] = probabilities
         decision["outcome"] = outcome_by_decision[decision["decision_id"]]
 
     decision_pairs = {(row["scenario_id"], row["decision_maker_id"]) for row in decisions}

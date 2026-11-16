@@ -1,8 +1,8 @@
-decision_id,scenario_id,decision_maker_id,recorded_choice_id,rationale
-DEC-SCN001-DM01,SCN-001,DM-01,SUP-B,Selected the lowest unit cost to reduce procurement spend.
-DEC-SCN001-DM02,SCN-001,DM-02,SUP-C,Selected the fastest replenishment to protect service levels.
-DEC-SCN001-DM03,SCN-001,DM-03,SUP-A,Preferred the strongest balanced reliability and risk posture.
-DEC-SCN001-DM04,SCN-001,DM-04,SUP-C,Accepted a moderate premium for faster delivery and balance.
+decision_id,scenario_id,decision_maker_id,recorded_choice_id,rationale,predicted_probabilities_json
+DEC-SCN001-DM01,SCN-001,DM-01,SUP-A,Selected Supplier A to prioritise cost savings.,"{""SUP-A"":0.65,""SUP-B"":0.20,""SUP-C"":0.15}"
+DEC-SCN001-DM02,SCN-001,DM-02,SUP-C,Selected Supplier C for the fastest replenishment.,"{""SUP-A"":0.10,""SUP-B"":0.30,""SUP-C"":0.60}"
+DEC-SCN001-DM03,SCN-001,DM-03,SUP-B,Selected Supplier B for reliability and supply-risk controls.,"{""SUP-A"":0.10,""SUP-B"":0.70,""SUP-C"":0.20}"
+DEC-SCN001-DM04,SCN-001,DM-04,SUP-C,Selected Supplier C to balance reliability and delivery speed.,"{""SUP-A"":0.15,""SUP-B"":0.45,""SUP-C"":0.40}"
 DEC-SCN002-DM01,SCN-002,DM-01,SUP-B,Used regional stock to avoid emergency sourcing premiums.
 DEC-SCN002-DM02,SCN-002,DM-02,SUP-C,Selected the fastest alternate with a confirmed disruption plan.
 DEC-SCN002-DM03,SCN-002,DM-03,SUP-C,Preferred the alternate with documented continuity controls.

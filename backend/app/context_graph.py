@@ -23,7 +23,7 @@ from app.models import (
     Situation,
 )
 
-PROVENANCE = "synthetic:backend/data/training"
+PROVENANCE = "synthetic"
 RELATIONSHIP_TYPES = {
     "HAS_PARAMETER",
     "HAS_ALTERNATIVE",
@@ -41,6 +41,8 @@ RELATIONSHIP_TYPES = {
     "HAS_DECISION",
     "HAS_OUTCOME",
     "EVALUATES",
+    "PARTICIPATED_IN",
+    "OCCURRED_IN",
 }
 
 
@@ -64,22 +66,29 @@ def add_node(
     properties: dict,
     provenance: str = PROVENANCE,
 ) -> None:
+    is_synthetic = provenance == "synthetic" or provenance.startswith("synthetic:")
+    data_source = "synthetic" if is_synthetic else (
+        "observed" if provenance.startswith("observed_human:") else "unknown"
+    )
+    node_properties = {**properties, "data_source": "synthetic"} if is_synthetic else properties
     existing = session.get(ContextNode, key)
     if existing is None:
         session.add(ContextNode(
             node_key=key,
             node_type=node_type,
             name=name,
-            properties=properties,
+            properties=node_properties,
             provenance=provenance,
-            is_synthetic=provenance.startswith("synthetic:"),
+            is_synthetic=is_synthetic,
+            data_source=data_source,
         ))
     else:
         existing.node_type = node_type
         existing.name = name
-        existing.properties = properties
+        existing.properties = node_properties
         existing.provenance = provenance
-        existing.is_synthetic = provenance.startswith("synthetic:")
+        existing.is_synthetic = is_synthetic
+        existing.data_source = data_source
 
 
 def add_relationship(
@@ -92,6 +101,15 @@ def add_relationship(
     occurred_at: datetime | None = None,
 ) -> None:
     edge_id = relation_id(source, target, relationship_type)
+    is_synthetic = provenance == "synthetic" or provenance.startswith("synthetic:")
+    data_source = "synthetic" if is_synthetic else (
+        "observed" if provenance.startswith("observed_human:") else "unknown"
+    )
+    relationship_properties = (
+        {**(properties or {}), "data_source": "synthetic"}
+        if is_synthetic
+        else properties or {}
+    )
     existing = session.get(ContextRelationship, edge_id)
     if existing is None:
         session.add(ContextRelationship(
@@ -99,13 +117,15 @@ def add_relationship(
             source_node_key=source,
             target_node_key=target,
             relationship_type=relationship_type,
-            properties=properties or {},
+            properties=relationship_properties,
             provenance=provenance,
+            data_source=data_source,
             occurred_at=occurred_at or utc_now(),
         ))
     else:
-        existing.properties = properties or {}
+        existing.properties = relationship_properties
         existing.provenance = provenance
+        existing.data_source = data_source
         if occurred_at:
             existing.occurred_at = occurred_at
 
@@ -124,6 +144,7 @@ def _node_payload(node: ContextNode) -> dict:
         "name": node.name,
         "properties": node.properties or {},
         "provenance": node.provenance,
+        "data_source": node.data_source,
         "is_synthetic": node.is_synthetic,
         "created_at": node.created_at.isoformat() if node.created_at else None,
         "updated_at": node.updated_at.isoformat() if node.updated_at else None,
@@ -138,6 +159,7 @@ def _relationship_payload(relationship: ContextRelationship) -> dict:
         "type": relationship.relationship_type,
         "properties": relationship.properties or {},
         "provenance": relationship.provenance,
+        "data_source": relationship.data_source,
         "timestamp": relationship.occurred_at.isoformat() if relationship.occurred_at else None,
         "bidirectional": True,
     }
@@ -167,6 +189,7 @@ def seed_context_graph(session: Session, training_data: dict, criteria: list[dic
         db_profile.role = profile["role"]
         db_profile.description = profile["description"]
         db_profile.is_active = True
+        db_profile.data_source = "synthetic"
         add_node(
             session,
             node_key("DecisionMaker", profile["id"]),
@@ -198,15 +221,17 @@ def seed_context_graph(session: Session, training_data: dict, criteria: list[dic
                 decision_maker_id=profile["id"],
                 version=1,
                 weights=profile["preferences"],
-                notes="Synthetic training profile",
+                notes="data_source=synthetic; synthetic training profile",
                 is_current=True,
+                data_source="synthetic",
             )
             session.add(preference)
             session.flush()
         else:
             preference.weights = profile["preferences"]
-            preference.notes = "Synthetic training profile"
+            preference.notes = "data_source=synthetic; synthetic training profile"
             preference.is_current = True
+            preference.data_source = "synthetic"
         profile_preference_ids[profile["id"]] = preference.id
         add_node(
             session,
@@ -248,9 +273,13 @@ def seed_context_graph(session: Session, training_data: dict, criteria: list[dic
             "location": scenario["location"],
             "product": scenario["product"],
             "operational_weights": scenario["operational_weights"],
+            "additional_parameters": scenario["additional_parameters"],
+            "data_source": "synthetic",
         }
+        situation.context_data.update(scenario["additional_parameters"])
         situation.is_synthetic = True
         situation.reported_by = "synthetic training fixture"
+        situation.data_source = "synthetic"
         situation_key = node_key("Situation", scenario_id)
         add_node(
             session,
@@ -266,6 +295,7 @@ def seed_context_graph(session: Session, training_data: dict, criteria: list[dic
             "required_within_days": scenario["required_within_days"],
             "stockout_risk": scenario["stockout_risk"],
             "location": scenario["location"],
+            **scenario["additional_parameters"],
         }.items():
             parameter_id = f"{scenario_id}:{parameter_name}"
             parameter_key = node_key("Parameter", parameter_id)
@@ -274,7 +304,12 @@ def seed_context_graph(session: Session, training_data: dict, criteria: list[dic
                 parameter_key,
                 "Parameter",
                 f"{parameter_name.replace('_', ' ').title()}: {parameter_value}",
-                {"key": parameter_name, "value": parameter_value, "scenario_id": scenario_id},
+                {
+                    "key": parameter_name,
+                    "value": parameter_value,
+                    "scenario_id": scenario_id,
+                    "data_source": "synthetic",
+                },
             )
             add_relationship(session, situation_key, parameter_key, "HAS_PARAMETER", {"key": parameter_name})
 
@@ -318,8 +353,10 @@ def seed_context_graph(session: Session, training_data: dict, criteria: list[dic
             alternative.attributes = {
                 **option_data["attributes"],
                 "metrics": option_data["metrics"],
+                "data_source": "synthetic",
             }
             alternative.is_available = option_data["available"]
+            alternative.data_source = "synthetic"
             alternative_key = node_key("Alternative", alternative_id)
             add_node(
                 session,
@@ -362,8 +399,21 @@ def seed_context_graph(session: Session, training_data: dict, criteria: list[dic
                 stage1_rows.append((option_data, score))
         stage1_rows.sort(key=lambda row: row[1], reverse=True)
 
-        for index, (option_data, score) in enumerate(stage1_rows, start=1):
+        rank_by_option = {
+            option_data["id"]: index
+            for index, (option_data, _) in enumerate(stage1_rows, start=1)
+        }
+        for option_data in scenario["options"]:
             alternative_id = f"{scenario_id}:{option_data['id']}"
+            score = sum(
+                option_data["metrics"][key] * scenario["operational_weights"][key]
+                for key in criterion_keys
+            )
+            rank = rank_by_option.get(option_data["id"])
+            eligible = (
+                option_data["available"]
+                and option_data["attributes"]["capacity_units"] >= scenario["required_units"]
+            )
             assessment = session.scalar(
                 select(Assessment).where(
                     Assessment.situation_id == scenario_id,
@@ -379,6 +429,8 @@ def seed_context_graph(session: Session, training_data: dict, criteria: list[dic
                     criterion_scores=option_data["metrics"],
                     criterion_weights=scenario["operational_weights"],
                     overall_score=round(score, 2),
+                    explanation="data_source=synthetic",
+                    data_source="synthetic",
                 )
                 session.add(assessment)
                 session.flush()
@@ -386,6 +438,8 @@ def seed_context_graph(session: Session, training_data: dict, criteria: list[dic
                 assessment.criterion_scores = option_data["metrics"]
                 assessment.criterion_weights = scenario["operational_weights"]
                 assessment.overall_score = round(score, 2)
+                assessment.explanation = "data_source=synthetic"
+                assessment.data_source = "synthetic"
             assessment_key = node_key("Assessment", f"{scenario_id}:{option_data['id']}:stage1-v1")
             add_node(
                 session,
@@ -396,7 +450,8 @@ def seed_context_graph(session: Session, training_data: dict, criteria: list[dic
                     "scenario_id": scenario_id,
                     "alternative_id": alternative_id,
                     "overall_score": round(score, 2),
-                    "rank": index,
+                    "rank": rank,
+                    "eligible": eligible,
                     "weights": scenario["operational_weights"],
                     "criterion_scores": option_data["metrics"],
                     "stage": 1,
@@ -408,7 +463,7 @@ def seed_context_graph(session: Session, training_data: dict, criteria: list[dic
                 assessment_key,
                 node_key("Alternative", alternative_id),
                 "EVALUATES",
-                {"score": round(score, 2), "rank": index},
+                {"score": round(score, 2), "rank": rank, "eligible": eligible},
             )
 
         for profile in profiles:
@@ -424,14 +479,16 @@ def seed_context_graph(session: Session, training_data: dict, criteria: list[dic
                     preference_id=preference_id,
                     event_number=1,
                     status="completed",
-                    event_context={"source": "synthetic_training", "scenario_id": scenario_id},
+                    event_context={"source": "synthetic", "data_source": "synthetic", "scenario_id": scenario_id},
+                    data_source="synthetic",
                 )
                 session.add(decision_event)
                 session.flush()
             else:
                 decision_event.preference_id = preference_id
                 decision_event.status = "completed"
-                decision_event.event_context = {"source": "synthetic_training", "scenario_id": scenario_id}
+                decision_event.event_context = {"source": "synthetic", "data_source": "synthetic", "scenario_id": scenario_id}
+                decision_event.data_source = "synthetic"
 
             available_options = [
                 option for option in scenario["options"]
@@ -442,10 +499,15 @@ def seed_context_graph(session: Session, training_data: dict, criteria: list[dic
                     option["metrics"][key] * profile["preferences"][key]
                     for key in criterion_keys
                 )
-                for option in available_options
+                for option in scenario["options"]
             }
-            probabilities = _softmax(utilities)
-            predicted_option = max(utilities, key=utilities.get)
+            probabilities = {option_id: 0.0 for option_id in utilities}
+            probabilities.update(_softmax({
+                option["id"]: utilities[option["id"]]
+                for option in available_options
+            }))
+            probabilities.update(decision.get("predicted_probabilities", {}))
+            predicted_option = max(probabilities, key=probabilities.get)
             event_key = node_key("DecisionEvent", event_id)
             add_node(
                 session,
@@ -457,10 +519,18 @@ def seed_context_graph(session: Session, training_data: dict, criteria: list[dic
                     "decision_maker_id": profile["id"],
                     "event_number": 1,
                     "status": "completed",
-                    "source": "synthetic_training",
+                    "source": "synthetic",
+                    "data_source": "synthetic",
                 },
             )
             add_relationship(session, situation_key, event_key, "HAS_DECISION_EVENT")
+            add_relationship(session, event_key, situation_key, "OCCURRED_IN")
+            add_relationship(
+                session,
+                node_key("DecisionMaker", profile["id"]),
+                event_key,
+                "PARTICIPATED_IN",
+            )
             add_relationship(
                 session,
                 event_key,
@@ -476,7 +546,7 @@ def seed_context_graph(session: Session, training_data: dict, criteria: list[dic
                 {"factor": "scenario decision conflict"},
             )
 
-            for option in available_options:
+            for option in scenario["options"]:
                 alternative_id = f"{scenario_id}:{option['id']}"
                 prediction = session.scalar(
                     select(Prediction).where(
@@ -493,11 +563,15 @@ def seed_context_graph(session: Session, training_data: dict, criteria: list[dic
                         probability=probabilities[option["id"]],
                         model_name="illustrative_softmax",
                         model_version="synthetic-v1",
+                        explanation="data_source=synthetic; illustrative, uncalibrated probability",
+                        data_source="synthetic",
                     )
                     session.add(prediction)
                 else:
                     prediction.utility_score = utilities[option["id"]]
                     prediction.probability = probabilities[option["id"]]
+                    prediction.explanation = "data_source=synthetic; illustrative, uncalibrated probability"
+                    prediction.data_source = "synthetic"
                 prediction_key = node_key(
                     "Prediction",
                     f"{event_id}:{option['id']}",
@@ -555,14 +629,16 @@ def seed_context_graph(session: Session, training_data: dict, criteria: list[dic
                     decision_event_id=event_id,
                     chosen_alternative_id=selected_alternative_id,
                     rationale=decision["rationale"],
-                    label_source="synthetic_example",
+                    label_source="synthetic",
+                    data_source="synthetic",
                 )
                 session.add(db_decision)
                 session.flush()
             else:
                 db_decision.chosen_alternative_id = selected_alternative_id
                 db_decision.rationale = decision["rationale"]
-                db_decision.label_source = "synthetic_example"
+                db_decision.label_source = "synthetic"
+                db_decision.data_source = "synthetic"
             decision_key = node_key("Decision", decision["decision_id"])
             selected_name = next(
                 option["name"] for option in scenario["options"]
@@ -578,7 +654,8 @@ def seed_context_graph(session: Session, training_data: dict, criteria: list[dic
                     "decision_maker_id": profile["id"],
                     "recorded_choice_id": decision["recorded_choice_id"],
                     "rationale": decision["rationale"],
-                    "label_source": "synthetic_example",
+                    "label_source": "synthetic",
+                    "data_source": "synthetic",
                     "predicted_choice_id": predicted_option,
                     "prediction_matches_recorded": predicted_option == decision["recorded_choice_id"],
                 },
@@ -589,7 +666,14 @@ def seed_context_graph(session: Session, training_data: dict, criteria: list[dic
                 decision_key,
                 node_key("Alternative", selected_alternative_id),
                 "SELECTED",
-                {"rationale": decision["rationale"], "label_source": "synthetic_example"},
+                {"rationale": decision["rationale"], "label_source": "synthetic"},
+            )
+            add_relationship(
+                session,
+                event_key,
+                node_key("Alternative", selected_alternative_id),
+                "SELECTED",
+                {"rationale": decision["rationale"], "label_source": "synthetic"},
             )
 
             outcome_data = decision["outcome"]
@@ -600,6 +684,7 @@ def seed_context_graph(session: Session, training_data: dict, criteria: list[dic
                 "actual_delivery_days": float(outcome_data["actual_delivery_days"]),
                 "cost_variance_percent": float(outcome_data["cost_variance_percent"]),
                 "stockout_units": int(outcome_data["stockout_units"]),
+                "data_source": "synthetic",
             }
             if db_outcome is None:
                 db_outcome = Outcome(
@@ -608,6 +693,7 @@ def seed_context_graph(session: Session, training_data: dict, criteria: list[dic
                     summary=outcome_data["notes"],
                     metrics=outcome_metrics,
                     actual_observed=False,
+                    data_source="synthetic",
                 )
                 session.add(db_outcome)
                 session.flush()
@@ -616,6 +702,7 @@ def seed_context_graph(session: Session, training_data: dict, criteria: list[dic
                 db_outcome.summary = outcome_data["notes"]
                 db_outcome.metrics = outcome_metrics
                 db_outcome.actual_observed = False
+                db_outcome.data_source = "synthetic"
             outcome_key = node_key("Outcome", decision["decision_id"])
             add_node(
                 session,
@@ -627,10 +714,12 @@ def seed_context_graph(session: Session, training_data: dict, criteria: list[dic
                     "status": outcome_data["status"],
                     "summary": outcome_data["notes"],
                     "actual_observed": False,
-                    "source": "synthetic_training",
+                    "source": "synthetic",
+                    "data_source": "synthetic",
                 },
             )
             add_relationship(session, decision_key, outcome_key, "RESULTED_IN")
+            add_relationship(session, decision_key, outcome_key, "HAS_OUTCOME")
 
     for scenario_id, scenario in scenarios.items():
         situation_key = node_key("Situation", scenario_id)
@@ -735,7 +824,17 @@ def graph_snapshot(session: Session, scenario_id: str | None = None, depth: int 
 def _node_payload_from_graph(data: dict) -> dict:
     return {
         key: data[key]
-        for key in ("id", "type", "name", "properties", "provenance", "is_synthetic", "created_at", "updated_at")
+        for key in (
+            "id",
+            "type",
+            "name",
+            "properties",
+            "provenance",
+            "data_source",
+            "is_synthetic",
+            "created_at",
+            "updated_at",
+        )
     }
 
 

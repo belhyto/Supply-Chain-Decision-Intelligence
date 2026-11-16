@@ -1,7 +1,7 @@
 scenario_id,option_id,name,metrics_json,attributes_json,notes,available
-SCN-001,SUP-A,Northstar Components,"{""reliability"":90,""cost"":70,""speed"":85,""risk"":80}","{""lead_time_days"":4,""unit_cost"":42,""capacity_units"":1800}",Strong delivery record; mid-range cost.,true
-SCN-001,SUP-B,ValueLink Supply,"{""reliability"":75,""cost"":95,""speed"":70,""risk"":85}","{""lead_time_days"":5,""unit_cost"":35,""capacity_units"":2400}",Lowest cost; delivery speed is less attractive.,true
-SCN-001,SUP-C,RapidRoute Industrial,"{""reliability"":85,""cost"":80,""speed"":90,""risk"":75}","{""lead_time_days"":3,""unit_cost"":39,""capacity_units"":1500}",Fastest lead time; somewhat higher supply-risk score variation.,true
+SCN-001,SUP-A,Supplier A,"{""reliability"":65,""cost"":95,""speed"":60,""risk"":60}","{""lead_time_days"":6,""cost_lakh"":14,""capacity_units"":1800}",Lowest cost; slower replenishment with moderate reliability.,true
+SCN-001,SUP-B,Supplier B,"{""reliability"":95,""cost"":70,""speed"":85,""risk"":90}","{""lead_time_days"":5,""cost_lakh"":18,""capacity_units"":2400}",Highest reliability and supply-risk suitability.,true
+SCN-001,SUP-C,Supplier C,"{""reliability"":80,""cost"":80,""speed"":95,""risk"":75}","{""lead_time_days"":3,""cost_lakh"":20,""capacity_units"":1500}",Fastest replenishment within the available budget.,true
 SCN-002,SUP-A,Northstar Components,"{""reliability"":92,""cost"":68,""speed"":82,""risk"":88}","{""lead_time_days"":4,""unit_cost"":46,""capacity_units"":1800}",Primary supplier is disrupted; alternate route not confirmed.,false
 SCN-002,SUP-B,ValueLink Supply,"{""reliability"":74,""cost"":94,""speed"":72,""risk"":84}","{""lead_time_days"":3,""unit_cost"":41,""capacity_units"":2400}",Can ship immediately from regional inventory.,true
 SCN-002,SUP-C,RapidRoute Industrial,"{""reliability"":88,""cost"":76,""speed"":90,""risk"":78}","{""lead_time_days"":2,""unit_cost"":48,""capacity_units"":1500}",Fast alternate with a verified disruption plan.,true

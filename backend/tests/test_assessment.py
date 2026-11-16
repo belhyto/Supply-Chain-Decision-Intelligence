@@ -18,7 +18,14 @@ class AssessmentTests(unittest.TestCase):
     def test_default_supply_chain_assessment_preserves_rankings(self):
         result = main.calculate_assessment(main.AssessRequest())
 
-        self.assertEqual(result["stage1"]["top_option"], "RapidRoute Industrial")
+        self.assertEqual(result["stage1"]["top_option"], "Supplier B")
+        self.assertEqual(
+            {
+                row["option_name"]: row["score"]
+                for row in result["stage1"]["rankings"]
+            },
+            {"Supplier A": 75.25, "Supplier B": 82.25, "Supplier C": 82.25},
+        )
         self.assertEqual(len(result["stage2"]), 4)
         for person in result["stage3"]["decision_maker_probabilities"]:
             self.assertAlmostEqual(

@@ -11,6 +11,7 @@ def utc_now():
 class TimestampMixin:
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+    data_source: Mapped[str] = mapped_column(String(40), default="unknown", server_default="unknown", nullable=False)
 
 class DecisionMaker(Base, TimestampMixin):
     __tablename__ = "decision_makers"
@@ -176,6 +177,7 @@ class ContextRelationship(Base):
     relationship_type: Mapped[str] = mapped_column(String(60), nullable=False)
     properties: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     provenance: Mapped[Optional[str]] = mapped_column(String(500))
+    data_source: Mapped[str] = mapped_column(String(40), default="unknown", server_default="unknown", nullable=False)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     source: Mapped["ContextNode"] = relationship(
         foreign_keys=[source_node_key],

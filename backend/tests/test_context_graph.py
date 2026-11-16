@@ -65,8 +65,106 @@ class ContextGraphTests(unittest.TestCase):
             "HAS_PREDICTION",
             "SELECTED",
             "RESULTED_IN",
+            "PARTICIPATED_IN",
+            "OCCURRED_IN",
         }.issubset(relationship_types))
         self.assertTrue(all(relationship["bidirectional"] for relationship in result["relationships"]))
+
+    def test_seed_persists_complete_synthetic_training_records(self):
+        counts = {
+            model.__tablename__: self.session.scalar(
+                select(func.count()).select_from(model)
+            )
+            for model in (
+                models.Situation,
+                models.Alternative,
+                models.DecisionMaker,
+                models.Preference,
+                models.Assessment,
+                models.DecisionEvent,
+                models.Prediction,
+                models.Decision,
+                models.Outcome,
+            )
+        }
+        self.assertEqual(counts, {
+            "situations": 8,
+            "alternatives": 24,
+            "decision_makers": 4,
+            "preferences": 4,
+            "assessments": 24,
+            "decision_events": 32,
+            "predictions": 96,
+            "decisions": 32,
+            "outcomes": 32,
+        })
+
+        scenario = self.session.get(models.Situation, "SCN-001")
+        self.assertEqual(scenario.context_data["demand_increase_percent"], 30)
+        self.assertEqual(scenario.context_data["current_inventory_days"], 5)
+        self.assertEqual(scenario.context_data["required_inventory_days"], 20)
+        self.assertEqual(scenario.context_data["available_budget_lakh"], 20.0)
+        self.assertEqual(scenario.context_data["data_source"], "synthetic")
+
+        expected_scores = {"SUP-A": 75.25, "SUP-B": 82.25, "SUP-C": 82.25}
+        for option_id, expected_score in expected_scores.items():
+            assessment = self.session.scalar(
+                select(models.Assessment).where(
+                    models.Assessment.situation_id == "SCN-001",
+                    models.Assessment.alternative_id == f"SCN-001:{option_id}",
+                )
+            )
+            self.assertAlmostEqual(assessment.overall_score, expected_score)
+
+        expected_probabilities = {
+            "DM-01": {"SUP-A": 0.65, "SUP-B": 0.20, "SUP-C": 0.15},
+            "DM-02": {"SUP-A": 0.10, "SUP-B": 0.30, "SUP-C": 0.60},
+            "DM-03": {"SUP-A": 0.10, "SUP-B": 0.70, "SUP-C": 0.20},
+            "DM-04": {"SUP-A": 0.15, "SUP-B": 0.45, "SUP-C": 0.40},
+        }
+        expected_choices = {"DM-01": "SUP-A", "DM-02": "SUP-C", "DM-03": "SUP-B", "DM-04": "SUP-C"}
+        for decision_maker_id, expected in expected_probabilities.items():
+            event_id = f"SCN-001:{decision_maker_id}:training"
+            predictions = self.session.scalars(
+                select(models.Prediction).where(models.Prediction.decision_event_id == event_id)
+            ).all()
+            self.assertEqual(
+                {row.alternative_id.rsplit(":", 1)[1]: row.probability for row in predictions},
+                expected,
+            )
+            decision = self.session.scalar(
+                select(models.Decision).where(models.Decision.decision_event_id == event_id)
+            )
+            self.assertEqual(decision.chosen_alternative_id, f"SCN-001:{expected_choices[decision_maker_id]}")
+            self.assertEqual(decision.label_source, "synthetic")
+
+        self.assertTrue(all(
+            node.data_source == "synthetic"
+            and node.provenance == "synthetic"
+            and node.properties["data_source"] == "synthetic"
+            for node in self.session.scalars(select(models.ContextNode)).all()
+        ))
+        self.assertTrue(all(
+            relationship.data_source == "synthetic"
+            and relationship.provenance == "synthetic"
+            and relationship.properties["data_source"] == "synthetic"
+            for relationship in self.session.scalars(select(models.ContextRelationship)).all()
+        ))
+        for model in (
+            models.Situation,
+            models.Alternative,
+            models.DecisionMaker,
+            models.Preference,
+            models.Assessment,
+            models.DecisionEvent,
+            models.Prediction,
+            models.Decision,
+            models.Outcome,
+        ):
+            self.assertTrue(all(
+                row.data_source == "synthetic"
+                for row in self.session.scalars(select(model)).all()
+            ), model.__tablename__)
 
     def test_networkx_traversal_is_bidirectional(self):
         graph = build_networkx_graph(self.session)
