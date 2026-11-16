@@ -26,6 +26,15 @@ from app.context_graph import (
 )
 from app.database import SessionLocal, engine, get_db
 from app.init_db import create_tables
+from app.ml.features import FeatureDataError
+from app.ml.predict import (
+    DecisionMakerNotFoundError,
+    ModelNotTrainedError,
+    NoAvailableAlternativesError,
+    PreferenceNotFoundError,
+    ScenarioNotFoundError,
+    predict_choice,
+)
 from app.models import (
     Alternative,
     ContextNode,
@@ -254,6 +263,11 @@ class AssessRequest(BaseModel):
     operational_weights: Dict[str, float] | None = None
     preference_profiles: List[PreferenceProfile] | None = None
     temperature: float | None = Field(default=None, gt=0, le=100)
+
+
+class MLPredictionRequest(BaseModel):
+    scenario_id: str = Field(min_length=1)
+    decision_maker_id: str = Field(min_length=1)
 
 
 class TwinUpdateRequest(BaseModel):
@@ -700,6 +714,21 @@ def evaluate_training_data():
         "scenario_disagreement": scenario_disagreement,
         "records": evaluations,
     }
+
+
+@app.post("/api/ml/predict")
+def predict_ml_choice(request: MLPredictionRequest, db: Session = Depends(get_db)):
+    try:
+        return predict_choice(db, request.scenario_id, request.decision_maker_id)
+    except ModelNotTrainedError as error:
+        raise HTTPException(
+            status_code=503,
+            detail="The ML choice model is not trained. Run `python -m app.ml.train` from backend.",
+        ) from error
+    except (ScenarioNotFoundError, DecisionMakerNotFoundError) as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except (PreferenceNotFoundError, NoAvailableAlternativesError, FeatureDataError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @app.get("/api/physical")

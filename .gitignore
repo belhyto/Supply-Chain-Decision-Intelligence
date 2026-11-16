@@ -1,2 +1,4 @@
 .env
 .playwright-mcp
+__pycache__/
+backend/app/ml/artifacts/
