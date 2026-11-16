@@ -17,6 +17,7 @@ from app.context_graph import seed_context_graph
 from app.database import Base
 from app.ml.predict import _load_model_cached, load_model, predict_choice
 from app.ml.train import load_training_dataset, train_model
+from app.models import DecisionEvent, Prediction
 
 
 class MLChoiceTests(unittest.TestCase):
@@ -103,7 +104,86 @@ class MLChoiceTests(unittest.TestCase):
 
         self.assertEqual(result["scenario_id"], "SCN-001")
         self.assertEqual(result["model"]["training_sample_count"], 32)
+        self.assertTrue(result["model"]["version"])
         self.assertEqual(len(result["probabilities"]), 3)
+        self.assertTrue(result["persisted"])
+        self.assertTrue(result["prediction_event_id"])
+
+        event = self.session.get(DecisionEvent, result["prediction_event_id"])
+        self.assertIsNotNone(event)
+        self.assertEqual(event.status, "predicted")
+        self.assertEqual(event.data_source, "model")
+        self.assertIsNone(event.decision)
+        self.assertEqual(len(event.predictions), 3)
+        self.assertTrue(all(item.data_source == "model" for item in event.predictions))
+        self.assertTrue(all(
+            item.model_version == f"ml-{result['model']['version']}"
+            for item in event.predictions
+        ))
+
+        with self.assertRaises(main.HTTPException):
+            main.record_ml_decision(
+                main.MLDecisionRequest(
+                    prediction_event_id=result["prediction_event_id"],
+                    chosen_option_id="NOT-IN-PREDICTION",
+                    rationale="This option was not presented.",
+                ),
+                self.session,
+            )
+        self.assertIsNone(event.decision)
+
+        record = main.record_ml_decision(
+            main.MLDecisionRequest(
+                prediction_event_id=result["prediction_event_id"],
+                chosen_option_id="SUP-A",
+                rationale="Supplier A meets the cost requirement.",
+            ),
+            self.session,
+        )
+        self.assertEqual(record["chosen_option_id"], "SUP-A")
+        self.assertEqual(len(record["probabilities"]), 3)
+        self.assertEqual(
+            record["preference_weights"],
+            main.TRAINING_DATA["profiles"][0]["preferences"],
+        )
+        self.assertIn("model_name", record)
+        self.assertEqual(
+            record["choice_matches_prediction"],
+            result["predicted_choice"] == "SUP-A",
+        )
+        self.assertEqual(event.decision.rationale, "Supplier A meets the cost requirement.")
+        self.assertEqual(len(self.session.query(Prediction).filter_by(
+            decision_event_id=event.id
+        ).all()), 3)
+        history = main.get_decision_feedback(self.session)["records"]
+        self.assertEqual(len(history), 1)
+        self.assertEqual(history[0]["id"], record["id"])
+        self.assertEqual(history[0]["rationale"], "Supplier A meets the cost requirement.")
+
+        outcome = main.record_decision_outcome(
+            record["id"],
+            main.OutcomeFeedbackRequest(
+                status="fulfilled",
+                notes="Replacement shipment arrived within the required window.",
+            ),
+            self.session,
+        )
+        self.assertEqual(outcome["outcome"]["status"], "fulfilled")
+        self.assertEqual(
+            outcome["outcome"]["notes"],
+            "Replacement shipment arrived within the required window.",
+        )
+
+        with self.assertRaises(main.HTTPException) as duplicate_error:
+            main.record_ml_decision(
+                main.MLDecisionRequest(
+                    prediction_event_id=result["prediction_event_id"],
+                    chosen_option_id="SUP-B",
+                    rationale="A second choice for the same event.",
+                ),
+                self.session,
+            )
+        self.assertEqual(duplicate_error.exception.status_code, 409)
 
 
 if __name__ == "__main__":

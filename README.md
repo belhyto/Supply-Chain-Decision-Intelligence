@@ -12,14 +12,14 @@ The prototype includes eight scenario records with three alternatives each, four
 
 The fixture can be downloaded as [multi_decision_maker_training_scenarios.zip](./backend/data/multi_decision_maker_training_scenarios.zip).
 
-The dataset is synthetic and for workflow/model testing only. Reported top-choice agreement and multiclass Brier score describe this fixture; they are not evidence of real-world behavior, validated predictions, or model calibration. Predicted choice, recorded choice, and observed outcome remain distinct fields. See `backend/data/training/README.md` for the CSV schema and interpretation.
+The dataset is synthetic and for workflow/model testing only. Reported top-choice agreement and multiclass Brier score describe this fixture; they are not evidence of real-world behavior, validated predictions, or model calibration. Predicted choice, recorded choice, and observed outcome remain distinct fields. The feedback screen persists ML predictions first, then stores the human decision separately so preference weights, rationale, and any later outcome can be compared without treating a difference as an error. See `backend/data/training/README.md` for the CSV schema and interpretation.
 ## Stack
 - Backend: Python 3.10+, FastAPI, Pydantic
 - Frontend: React + Vite
 - Configuration-driven mock data plus an eight-scenario synthetic training fixture with 24 alternatives, four decision-maker profiles, 32 recorded decisions, and 32 outcomes
 
 ## Important interpretation
-Suitability scores are weighted evaluations of option fit. Choice probabilities are illustrative model estimates produced by a softmax function, not empirical probabilities. Calibrate the probability model against observed historical choices before operational use.
+Suitability scores are weighted evaluations of option fit. Stage 3 softmax estimates and multinomial logistic-regression probabilities are illustrative, not calibrated evidence of real human behavior. The current classifier is trained on synthetic decisions; calibrate and validate it against observed historical choices before operational use.
 
 ## Configure another domain
 The pipeline reads its domain, situation, criteria, weights, available options, and decision-maker profiles from `backend/app/config/decision_pipeline.json`. Edit that file to create another domain without changing the scoring implementation:
@@ -72,8 +72,10 @@ In development, Vite proxies `/api` requests to the FastAPI backend at `http://1
 - `GET /api/physical` — physical network: warehouses, inventory, suppliers, shipments, and orders
 - `GET /api/twin` — current digital-twin snapshot and recent update events
 - `POST /api/twin/updates` — validate and apply an operational update to inventory, supplier, shipment, or order state
-- `GET /api/feedback` — decisions and any captured outcomes
-- `POST /api/feedback/decisions` — record a human-selected option with its model prediction and probability
+- `POST /api/ml/predict` — generate and persist an ML prediction event and its alternative probabilities without recording a human decision
+- `POST /api/ml/decisions` — record a human-selected alternative and rationale separately against a prediction event
+- `GET /api/feedback` — recorded ML and interactive decisions, full probability distributions, preference weights, and captured outcomes
+- `POST /api/feedback/decisions` — legacy interactive decision route using the illustrative softmax probabilities
 - `POST /api/feedback/decisions/{decision_id}/outcome` — record fulfillment status and optional twin updates from observed operations
 - `GET /api/context-graph?scenario_id=SCN-001&depth=3` — read a scenario-centered graph projection; omit the scenario ID for the full graph
 - `GET /api/context-graph/nodes/{node_key}/neighbors?depth=1` — traverse a node's relationships in either direction

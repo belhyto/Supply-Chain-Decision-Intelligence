@@ -68,9 +68,15 @@ def add_node(
 ) -> None:
     is_synthetic = provenance == "synthetic" or provenance.startswith("synthetic:")
     data_source = "synthetic" if is_synthetic else (
-        "observed" if provenance.startswith("observed_human:") else "unknown"
+        "observed" if provenance.startswith("observed_human:")
+        else "model" if provenance.startswith("model:")
+        else "unknown"
     )
-    node_properties = {**properties, "data_source": "synthetic"} if is_synthetic else properties
+    node_properties = (
+        {**properties, "data_source": data_source}
+        if data_source != "unknown"
+        else properties
+    )
     existing = session.get(ContextNode, key)
     if existing is None:
         session.add(ContextNode(
@@ -103,11 +109,13 @@ def add_relationship(
     edge_id = relation_id(source, target, relationship_type)
     is_synthetic = provenance == "synthetic" or provenance.startswith("synthetic:")
     data_source = "synthetic" if is_synthetic else (
-        "observed" if provenance.startswith("observed_human:") else "unknown"
+        "observed" if provenance.startswith("observed_human:")
+        else "model" if provenance.startswith("model:")
+        else "unknown"
     )
     relationship_properties = (
-        {**(properties or {}), "data_source": "synthetic"}
-        if is_synthetic
+        {**(properties or {}), "data_source": data_source}
+        if data_source != "unknown"
         else properties or {}
     )
     existing = session.get(ContextRelationship, edge_id)

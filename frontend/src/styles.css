@@ -33,6 +33,20 @@ h1{font-size:clamp(28px,4vw,44px);line-height:1.12;margin:9px 0 8px;letter-spaci
 .record-heading{display:flex;justify-content:space-between;align-items:center;gap:12px}
 .record-heading h4{margin-top:7px}.record-notes{color:#aaa;font-size:11px}
 .feedback-form .wide-field{grid-column:1/-1}
+.feedback-decision-maker{display:flex;flex-direction:column;gap:7px;max-width:520px;color:#aaa;font-size:11px}
+.feedback-decision-maker select{background:#111;border:1px solid #414141;border-radius:6px;padding:10px;color:#eee;font:12px Manrope,system-ui,sans-serif}
+.preference-profile{margin:18px 0;padding:13px;background:#202020;border:1px solid #333;border-radius:7px}
+.preference-list{display:flex;gap:9px;flex-wrap:wrap;margin-top:9px}
+.preference-list span,.historical-probabilities span{font-size:10px;color:#aaa;background:#282828;border:1px solid #393939;border-radius:4px;padding:6px 8px}
+.preference-list b,.historical-probabilities b{color:#f5bd5c;font:10px 'DM Mono',monospace}
+.probability-list{margin:18px 0}
+.probability-item{margin:13px 0}
+.probability-label{display:flex;justify-content:space-between;margin-bottom:7px;font-size:11px;color:#ddd}
+.probability-label b{color:#f5bd5c;font:12px 'DM Mono',monospace}
+.historical-details{display:grid;gap:10px;margin:12px 0}
+.historical-probabilities{display:flex;gap:7px;flex-wrap:wrap}
+.new-prediction-button{margin-bottom:14px}
+.primary-button:disabled{opacity:.5;cursor:not-allowed}
 .scenario-picker{display:flex;align-items:center;gap:10px;margin:12px 0;color:#aaa;font-size:11px}
 .scenario-picker select{max-width:min(100%,440px);background:#111;border:1px solid #414141;border-radius:6px;padding:8px 10px;color:#eee;font:12px Manrope,system-ui,sans-serif}
 .scenario-conflict{margin:8px 0 0}.scenario-conflict b{color:#d8b06a}

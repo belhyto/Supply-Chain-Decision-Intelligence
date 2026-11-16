@@ -211,6 +211,7 @@ def predict_choice(
         },
         "model": {
             "name": metadata["model_name"],
+            "version": metadata["trained_at"],
             "training_data_source": metadata["training_data_source"],
             "training_sample_count": metadata["training_sample_count"],
             "training_scenario_count": metadata["training_scenario_count"],

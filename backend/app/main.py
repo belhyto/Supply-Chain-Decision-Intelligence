@@ -270,6 +270,12 @@ class MLPredictionRequest(BaseModel):
     decision_maker_id: str = Field(min_length=1)
 
 
+class MLDecisionRequest(BaseModel):
+    prediction_event_id: str = Field(min_length=1, max_length=60)
+    chosen_option_id: str = Field(min_length=1, max_length=30)
+    rationale: str = Field(min_length=1, max_length=1000)
+
+
 class TwinUpdateRequest(BaseModel):
     source: str = Field(min_length=1, max_length=100)
     entity_type: Literal["inventory", "supplier", "shipment", "order"]
@@ -719,7 +725,7 @@ def evaluate_training_data():
 @app.post("/api/ml/predict")
 def predict_ml_choice(request: MLPredictionRequest, db: Session = Depends(get_db)):
     try:
-        return predict_choice(db, request.scenario_id, request.decision_maker_id)
+        prediction = predict_choice(db, request.scenario_id, request.decision_maker_id)
     except ModelNotTrainedError as error:
         raise HTTPException(
             status_code=503,
@@ -729,6 +735,234 @@ def predict_ml_choice(request: MLPredictionRequest, db: Session = Depends(get_db
         raise HTTPException(status_code=404, detail=str(error)) from error
     except (PreferenceNotFoundError, NoAvailableAlternativesError, FeatureDataError) as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
+    return persist_ml_prediction(db, prediction)
+
+
+def persist_ml_prediction(db: Session, prediction: dict) -> dict:
+    scenario_id = prediction["scenario_id"]
+    decision_maker_id = prediction["decision_maker"]["id"]
+    preference = db.scalar(
+        select(Preference)
+        .where(
+            Preference.decision_maker_id == decision_maker_id,
+            Preference.is_current.is_(True),
+        )
+        .order_by(Preference.version.desc())
+    )
+    if preference is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"No current preference profile exists for decision-maker {decision_maker_id}.",
+        )
+
+    event_number = (db.scalar(
+        select(func.max(DecisionEvent.event_number)).where(
+            DecisionEvent.situation_id == scenario_id,
+            DecisionEvent.decision_maker_id == decision_maker_id,
+        )
+    ) or 0) + 1
+    prediction_run_id = f"PRD-{uuid4().hex[:12].upper()}"
+    event_id = f"{scenario_id}:{decision_maker_id}:ml:{uuid4().hex}"
+    model_version = f"ml-{prediction['model']['version']}"
+    model_name = prediction["model"]["name"]
+    event_context = {
+        "source": "ml_prediction",
+        "data_source": "model",
+        "scenario_id": scenario_id,
+        "prediction_run_id": prediction_run_id,
+        "model_name": model_name,
+        "model_version": model_version,
+        "training_data_source": prediction["model"]["training_data_source"],
+    }
+    event = DecisionEvent(
+        id=event_id,
+        situation_id=scenario_id,
+        decision_maker_id=decision_maker_id,
+        preference_id=preference.id,
+        event_number=event_number,
+        status="predicted",
+        event_context=event_context,
+        data_source="model",
+    )
+    db.add(event)
+    db.flush()
+
+    provenance = f"model:{model_name}"
+    event_key = node_key("DecisionEvent", event_id)
+    situation_key = node_key("Situation", scenario_id)
+    decision_maker_key = node_key("DecisionMaker", decision_maker_id)
+    preference_key = node_key("Preference", decision_maker_id)
+    add_node(
+        db,
+        event_key,
+        "DecisionEvent",
+        f"{prediction['decision_maker']['name']} model prediction for {scenario_id}",
+        event_context,
+        provenance,
+    )
+    add_relationship(db, situation_key, event_key, "HAS_DECISION_EVENT", provenance=provenance)
+    add_relationship(db, event_key, situation_key, "OCCURRED_IN", provenance=provenance)
+    add_relationship(db, decision_maker_key, event_key, "PARTICIPATED_IN", provenance=provenance)
+    add_relationship(
+        db,
+        event_key,
+        preference_key,
+        "INFLUENCED_BY",
+        {"factor": "decision-maker preference weights"},
+        provenance,
+    )
+
+    for item in prediction["probabilities"]:
+        alternative_id = item["alternative_id"]
+        prediction_key = node_key("Prediction", f"{event_id}:{item['alternative_code']}")
+        db.add(Prediction(
+            decision_event_id=event_id,
+            alternative_id=alternative_id,
+            probability=item["probability"],
+            model_name=model_name,
+            model_version=model_version,
+            explanation=prediction["disclaimer"],
+            data_source="model",
+        ))
+        add_node(
+            db,
+            prediction_key,
+            "Prediction",
+            f"Predicted probability for {item['alternative_name']}",
+            {
+                "probability": item["probability"],
+                "model_name": model_name,
+                "model_version": model_version,
+                "prediction_run_id": prediction_run_id,
+            },
+            provenance,
+        )
+        add_relationship(
+            db,
+            event_key,
+            prediction_key,
+            "HAS_PREDICTION",
+            {"probability": item["probability"]},
+            provenance,
+        )
+        alternative_key = node_key("Alternative", alternative_id)
+        add_relationship(
+            db,
+            prediction_key,
+            alternative_key,
+            "EVALUATES",
+            {"probability": item["probability"]},
+            provenance,
+        )
+        if item["alternative_code"] == prediction["predicted_choice"]:
+            add_relationship(
+                db,
+                event_key,
+                prediction_key,
+                "PREDICTED_AS",
+                {"probability": item["probability"]},
+                provenance,
+            )
+            add_relationship(
+                db,
+                prediction_key,
+                alternative_key,
+                "PREDICTED_AS",
+                {"probability": item["probability"]},
+                provenance,
+            )
+
+    db.commit()
+    return {
+        **prediction,
+        "prediction_event_id": event_id,
+        "prediction_run_id": prediction_run_id,
+        "persisted": True,
+    }
+
+
+@app.post("/api/ml/decisions")
+def record_ml_decision(request: MLDecisionRequest, db: Session = Depends(get_db)):
+    event = db.get(DecisionEvent, request.prediction_event_id)
+    if event is None or (event.event_context or {}).get("source") != "ml_prediction":
+        raise HTTPException(status_code=404, detail="ML prediction event was not found.")
+    if event.decision is not None:
+        raise HTTPException(status_code=409, detail="A human decision is already recorded for this prediction.")
+
+    chosen_prediction = next(
+        (
+            item for item in event.predictions
+            if item.alternative.code == request.chosen_option_id
+        ),
+        None,
+    )
+    if chosen_prediction is None:
+        raise HTTPException(
+            status_code=422,
+            detail="The selected alternative was not included in this prediction.",
+        )
+
+    public_id = f"DEC-{uuid4().hex[:12].upper()}"
+    event.status = "decided"
+    event.event_context = {
+        **(event.event_context or {}),
+        "public_decision_id": public_id,
+        "recorded_choice_id": chosen_prediction.alternative.code,
+    }
+    decision = Decision(
+        decision_event=event,
+        chosen_alternative_id=chosen_prediction.alternative_id,
+        rationale=request.rationale,
+        label_source="observed_human",
+        confidence_note=public_id,
+        data_source="observed_human",
+    )
+    db.add(decision)
+    db.flush()
+
+    decision_key = node_key("Decision", public_id)
+    event_key = node_key("DecisionEvent", event.id)
+    alternative_key = node_key("Alternative", chosen_prediction.alternative_id)
+    add_node(
+        db,
+        decision_key,
+        "Decision",
+        f"{event.decision_maker.name} selected {chosen_prediction.alternative.name}",
+        {
+            "scenario_id": event.situation_id,
+            "decision_maker_id": event.decision_maker_id,
+            "recorded_choice_id": chosen_prediction.alternative.code,
+            "rationale": request.rationale,
+            "label_source": "observed_human",
+            "prediction_run_id": (event.event_context or {}).get("prediction_run_id"),
+        },
+        "observed_human:dashboard",
+    )
+    add_relationship(
+        db,
+        event_key,
+        decision_key,
+        "HAS_DECISION",
+        provenance="observed_human:dashboard",
+    )
+    add_relationship(
+        db,
+        decision_key,
+        alternative_key,
+        "SELECTED",
+        {"rationale": request.rationale},
+        "observed_human:dashboard",
+    )
+    add_relationship(
+        db,
+        event_key,
+        alternative_key,
+        "SELECTED",
+        {"rationale": request.rationale},
+        "observed_human:dashboard",
+    )
+    db.commit()
+    return feedback_record(event, decision)
 
 
 @app.get("/api/physical")
@@ -1034,10 +1268,13 @@ def create_persisted_decision(db: Session, request: DecisionFeedbackRequest) -> 
 
 def feedback_record(event: DecisionEvent, decision: Decision) -> dict:
     event_context = event.event_context or {}
-    predictions = [
-        prediction for prediction in event.predictions
-        if prediction.model_version.startswith("interactive-")
-    ]
+    if event_context.get("source") == "ml_prediction":
+        predictions = list(event.predictions)
+    else:
+        predictions = [
+            prediction for prediction in event.predictions
+            if prediction.model_version.startswith("interactive-")
+        ]
     predicted = max(predictions, key=lambda prediction: prediction.probability) if predictions else None
     predicted_name = predicted.alternative.name if predicted else None
     chosen = decision.chosen_alternative
@@ -1055,10 +1292,26 @@ def feedback_record(event: DecisionEvent, decision: Decision) -> dict:
         "decision_maker_name": event.decision_maker.name,
         "chosen_option_id": chosen.code,
         "chosen_option_name": chosen.name,
+        "prediction_event_id": event.id,
+        "prediction_run_id": event_context.get("prediction_run_id"),
         "predicted_choice": predicted_name,
         "predicted_choice_probability_percent": round(predicted.probability * 100, 1) if predicted else 0,
         "chosen_option_probability_percent": round(chosen_prediction.probability * 100, 1) if chosen_prediction else 0,
         "choice_matches_prediction": chosen.id == predicted.alternative_id if predicted else False,
+        "probabilities": [
+            {
+                "option_id": prediction.alternative.code,
+                "option_name": prediction.alternative.name,
+                "probability_percent": round(prediction.probability * 100, 1),
+            }
+            for prediction in sorted(
+                predictions,
+                key=lambda item: item.probability,
+                reverse=True,
+            )
+        ],
+        "preference_weights": event.preference.weights if event.preference else {},
+        "model_name": predicted.model_name if predicted else None,
         "rationale": decision.rationale or "",
         "twin_revision": event_context.get("twin_revision", 0),
         "outcome": {
@@ -1075,7 +1328,8 @@ def persisted_feedback_records(db: Session) -> list[dict]:
     records = [
         feedback_record(event, event.decision)
         for event in events
-        if (event.event_context or {}).get("source") == "interactive" and event.decision is not None
+        if (event.event_context or {}).get("source") in {"interactive", "ml_prediction"}
+        and event.decision is not None
     ]
     return records
 
@@ -1114,13 +1368,14 @@ def persist_decision_outcome(
     decision = event.decision
     outcome = decision.outcome
     if outcome is None:
-        outcome = Outcome(decision_id=decision.id)
+        outcome = Outcome(decision_id=decision.id, data_source="observed_human")
         db.add(outcome)
     outcome.status = request.status
     outcome.summary = request.notes
     outcome.metrics = {"twin_updates": applied_events}
     outcome.actual_observed = True
     outcome.observed_at = datetime.now(timezone.utc)
+    outcome.data_source = "observed_human"
     outcome_key = node_key("Outcome", decision_id)
     add_node(
         db,

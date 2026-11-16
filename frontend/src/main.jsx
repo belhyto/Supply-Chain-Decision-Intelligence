@@ -158,7 +158,7 @@ function App() {
             {result && activeStage === 2 && <StageTwo result={result} criteria={data.criteria} />}
             {result && activeStage === 3 && <StageThree result={result} temperature={temperature} setTemperature={(value) => { setTemperature(value); runAssessment(value); }} trainingEvaluation={trainingEvaluation} scenarioId={selectedScenario} />}
           </>}
-          {activeLayer === 4 && <FeedbackLayer data={data} result={result} records={feedback} onChanged={refreshFeedback} scenarioId={selectedScenario} />}
+          {activeLayer === 4 && <FeedbackLayer data={data} records={feedback} onChanged={refreshFeedback} scenarioId={selectedScenario} />}
           {activeLayer === 5 && <KnowledgeGraphLayer scenarioId={selectedScenario} />}
           <footer>
             <span>DIGITAL TWIN / MOCK OPERATIONAL DATA</span>
@@ -371,47 +371,112 @@ function TwinEntityCard({ title, entities, fields, labels }) {
   return <section className="panel"><h3>{title}</h3>{entities.map(entity => <div className="twin-entity" key={entity.id}><span className="eyebrow">{entity.id}</span><DataGrid values={Object.fromEntries(fields.map(field => [labels[field] ?? field, field in (entity.metrics ?? {}) ? entity.metrics[field] : entity[field]]))} /></div>)}</section>;
 }
 
-function FeedbackLayer({ data, result, records, onChanged, scenarioId }) {
+function FeedbackLayer({ data, records, onChanged, scenarioId }) {
   const [decisionMakerId, setDecisionMakerId] = useState(data.decision_makers[0]?.id ?? "");
+  const [prediction, setPrediction] = useState(null);
+  const [loadingPrediction, setLoadingPrediction] = useState(false);
+  const [savingDecision, setSavingDecision] = useState(false);
+  const [decisionRecorded, setDecisionRecorded] = useState(false);
   const [chosenOptionId, setChosenOptionId] = useState("");
   const [rationale, setRationale] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const decisionMaker = data.decision_makers.find(person => person.id === decisionMakerId);
+
+  async function loadPrediction() {
+    setError("");
+    setMessage("");
+    setPrediction(null);
+    setDecisionRecorded(false);
+    setChosenOptionId("");
+    setLoadingPrediction(true);
+    try {
+      const response = await fetch("/api/ml/predict", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scenario_id: scenarioId, decision_maker_id: decisionMakerId })
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.detail ?? "Model prediction could not be generated.");
+      setPrediction(body);
+    } catch (predictionError) {
+      setError(predictionError instanceof Error ? predictionError.message : "Model prediction could not be generated.");
+    } finally {
+      setLoadingPrediction(false);
+    }
+  }
+
+  useEffect(() => {
+    if (decisionMakerId) loadPrediction();
+  }, [scenarioId, decisionMakerId]);
 
   async function createDecision(event) {
     event.preventDefault();
     setError("");
     setMessage("");
-    const response = await fetch("/api/feedback/decisions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ scenario_id: scenarioId, decision_maker_id: decisionMakerId, chosen_option_id: chosenOptionId, rationale })
-    });
-    const body = await response.json();
-    if (!response.ok) {
-      setError(body.detail ?? "Decision could not be recorded.");
-      return;
+    setSavingDecision(true);
+    try {
+      const response = await fetch("/api/ml/decisions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prediction_event_id: prediction.prediction_event_id,
+          chosen_option_id: chosenOptionId,
+          rationale
+        })
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.detail ?? "Decision could not be recorded.");
+      setDecisionRecorded(true);
+      setMessage(
+        `Recorded ${body.chosen_option_name}. It ${
+          body.choice_matches_prediction ? "matched" : "differed from"
+        } the model's most likely choice; this comparison is descriptive, not a judgment.`
+      );
+      setRationale("");
+      try {
+        await onChanged();
+      } catch {
+        setError("Decision was recorded, but the historical list could not be refreshed.");
+      }
+    } catch (decisionError) {
+      setError(decisionError instanceof Error ? decisionError.message : "Decision could not be recorded.");
+    } finally {
+      setSavingDecision(false);
     }
-    setMessage(`Decision ${body.id} recorded against predicted choice "${body.predicted_choice}".`);
-    setRationale("");
-    await onChanged();
   }
 
   return <>
-    <section className="section-heading"><div><div className="eyebrow">LAYER 04 · DECISION FEEDBACK</div><h2>Decision and outcome learning loop</h2></div><div className="badge">HUMAN DECISION RECORDED</div></section>
-    <p className="intro">Record the option a person actually selected, compare it with the model's most likely choice, and later attach the observed operational outcome. This prototype records feedback in memory for this server session.</p>
+    <section className="section-heading"><div><div className="eyebrow">LAYER 04 · DECISION FEEDBACK</div><h2>Decision and outcome learning loop</h2></div><div className="badge">{records.some(record => record.scenario_id === scenarioId) ? "HUMAN DECISION RECORDED" : "HUMAN DECISION REQUIRED"}</div></section>
+    <p className="intro">Generate and persist a model prediction, record the human's actual choice separately, then attach the observed operational outcome. Differences are retained as decision evidence—not treated as errors.</p>
     <section className="panel">
-      <h3>Record an actual decision</h3>
+      <h3>Model prediction</h3>
+      <label className="feedback-decision-maker">Decision-maker<select value={decisionMakerId} onChange={event => setDecisionMakerId(event.target.value)}>{data.decision_makers.map(person => <option key={person.id} value={person.id}>{person.name} · {person.role}</option>)}</select></label>
+      {decisionMaker && <div className="preference-profile">
+        <span className="eyebrow">PREFERENCE PROFILE · {decisionMaker.role}</span>
+        <div className="preference-list">{Object.entries(decisionMaker.preferences).map(([criterion, weight]) => <span key={criterion}>{criterion}: <b>{(weight * 100).toFixed(0)}%</b></span>)}</div>
+      </div>}
+      {loadingPrediction && <p className="hint">Generating and saving the model prediction…</p>}
+      {prediction && <div className="probability-list">
+        {prediction.probabilities.map(item => <div className="probability-item" key={item.alternative_id}>
+          <div className="probability-label"><span>{item.alternative_name}</span><b>{item.probability_percent.toFixed(1)}%</b></div>
+          <ScoreBar value={item.probability_percent} />
+        </div>)}
+        <p className="hint">{prediction.model.name} · prediction {prediction.prediction_run_id} · {prediction.disclaimer}</p>
+      </div>}
+      {prediction && decisionRecorded && <button type="button" className="secondary-button new-prediction-button" onClick={loadPrediction}>Generate another prediction</button>}
       <form className="update-form feedback-form" onSubmit={createDecision}>
-        <label>Decision-maker<select value={decisionMakerId} onChange={event => setDecisionMakerId(event.target.value)}>{data.decision_makers.map(person => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label>
-        <label>Chosen option<select value={chosenOptionId || result?.stage1.rankings[0]?.option_id || ""} onChange={event => setChosenOptionId(event.target.value)} required>{(result?.stage1.rankings ?? []).map(option => <option key={option.option_id} value={option.option_id}>{option.option_name}</option>)}</select></label>
-        <label className="wide-field">Decision rationale<input value={rationale} onChange={event => setRationale(event.target.value)} placeholder="Why was this option selected?" /></label>
-        <button type="submit" className="primary-button">Record decision</button>
+        <label>Human's actual choice<select value={chosenOptionId} onChange={event => setChosenOptionId(event.target.value)} required disabled={!prediction || loadingPrediction || decisionRecorded}>
+          <option value="" disabled>Choose an alternative</option>
+          {(prediction?.probabilities ?? []).map(option => <option key={option.alternative_id} value={option.alternative_code}>{option.alternative_name}</option>)}
+        </select></label>
+        <label className="wide-field">Decision rationale<input value={rationale} onChange={event => setRationale(event.target.value)} placeholder="Why was this option selected?" required disabled={decisionRecorded} /></label>
+        <button type="submit" className="primary-button" disabled={!prediction || loadingPrediction || savingDecision || decisionRecorded || !chosenOptionId}>{decisionRecorded ? "Decision recorded" : savingDecision ? "Recording…" : "Record human decision"}</button>
       </form>
       {message && <p className="success-message">{message}</p>}
       {error && <p className="inline-error">{error}</p>}
     </section>
-    <section className="panel"><h3>Recorded decisions & observed outcomes</h3>{records.filter(record => record.scenario_id === scenarioId).length === 0 ? <p className="hint">No interactive decisions have been recorded for this scenario yet.</p> : records.filter(record => record.scenario_id === scenarioId).map(record => <DecisionRecord key={record.id} record={record} onChanged={onChanged} />)}</section>
+    <section className="panel"><h3>Recorded decisions & observed outcomes</h3>{records.filter(record => record.scenario_id === scenarioId).length === 0 ? <p className="hint">No human decisions have been recorded for this scenario yet.</p> : records.filter(record => record.scenario_id === scenarioId).map(record => <DecisionRecord key={record.id} record={record} onChanged={onChanged} />)}</section>
   </>;
 }
 
@@ -439,6 +504,10 @@ function DecisionRecord({ record, onChanged }) {
   return <article className="feedback-record">
     <div className="record-heading"><div><span className="eyebrow">{record.id} · {record.decision_maker_name}</span><h4>Selected: {record.chosen_option_name}</h4></div><span className={record.choice_matches_prediction ? "match" : "different"}>{record.choice_matches_prediction ? "MATCHED PREDICTION" : "DIFFERED FROM PREDICTION"}</span></div>
     <p className="hint">Predicted: {record.predicted_choice} ({record.predicted_choice_probability_percent.toFixed(1)}%); chosen option estimate: {record.chosen_option_probability_percent.toFixed(1)}% · Twin revision {record.twin_revision}</p>
+    {record.probabilities?.length > 0 && <div className="historical-details">
+      <div className="historical-probabilities">{record.probabilities.map(option => <span key={option.option_id}>{option.option_name}: <b>{option.probability_percent.toFixed(1)}%</b></span>)}</div>
+      <div className="preference-list"><span className="eyebrow">PREFERENCE WEIGHTS</span>{Object.entries(record.preference_weights ?? {}).map(([criterion, weight]) => <span key={criterion}>{criterion}: <b>{(weight * 100).toFixed(0)}%</b></span>)}</div>
+    </div>}
     {record.rationale && <p className="record-notes">{record.rationale}</p>}
     {record.outcome ? <div className="callout"><b>Outcome: {record.outcome.status}</b>{record.outcome.notes && <><br/><small>{record.outcome.notes}</small></>}</div> : <form className="outcome-form" onSubmit={recordOutcome}><label>Observed result<select value={status} onChange={event => setStatus(event.target.value)}><option value="fulfilled">Fulfilled</option><option value="delayed">Delayed</option><option value="partial">Partial</option><option value="failed">Failed</option></select></label><label>Outcome notes<input value={notes} onChange={event => setNotes(event.target.value)} placeholder="Delivery time, quantity, or cost observed" /></label><button type="submit" className="secondary-button">Save outcome</button></form>}
     {error && <p className="inline-error">{error}</p>}

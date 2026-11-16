@@ -54,7 +54,18 @@ Content-Type: application/json
 {"scenario_id":"SCN-001","decision_maker_id":"DM-01"}
 ```
 
-The response contains probabilities for currently available alternatives, plus the preference weights and alternative criterion scores used as features. Probabilities are renormalized over eligible alternatives. The grouped holdout score is only a smoke-test metric for this tiny synthetic fixture; it is not evidence of real-world predictive accuracy. Replace or supplement synthetic labels with observed decisions before using the model for operational guidance.
+The response contains probabilities for currently available alternatives, plus the preference weights and alternative criterion scores used as features. Probabilities are renormalized over eligible alternatives. Each request also persists a `DecisionEvent` and one `Prediction` per eligible alternative in PostgreSQL; it does not create an actual `Decision`.
+
+Record a human choice separately by posting the returned `prediction_event_id` and the selected alternative code:
+
+```http
+POST /api/ml/decisions
+Content-Type: application/json
+
+{"prediction_event_id":"SCN-001:DM-01:ml:<run-id>","chosen_option_id":"SUP-C","rationale":"Meets the delivery deadline."}
+```
+
+The human decision references the prediction event and is linked to the selected alternative independently of the model's probabilities. `GET /api/feedback` includes the full probability distribution, preference profile, rationale, comparison, and any recorded outcome. The grouped holdout score is only a smoke-test metric for this tiny synthetic fixture; it is not evidence of real-world predictive accuracy. Replace or supplement synthetic labels with observed decisions before using the model for operational guidance.
 
 ## Seed PostgreSQL
 
