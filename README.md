@@ -83,6 +83,14 @@ In development, Vite proxies `/api` requests to the FastAPI backend at `http://1
 - `POST /api/context-graph/nodes` — persist a constraint, event, policy, external condition, evidence item, or source and connect it to a situation
 - `POST /api/context-graph/relationships` — persist a typed relationship between existing graph nodes
 
+## Dashboard demonstration
+1. Select `SCN-001 · Supplier disruption`, then open **Decision feedback**.
+2. Select **Procurement Manager** and use the sample decision: choose `Supplier A` with the rationale “Supplier A meets the cost requirement while staying within the ₹20 lakh budget.”
+3. Record the human choice, then use the sample outcome “1,200 units arrived before the 7-day deadline; no stockout occurred.”
+4. Open **Knowledge graph**, keep the `Alternative` node filter to see the supplier-choice network, or choose **All types** to explore more of the scenario. The sample context input is “Primary supplier unavailable; demand is up 30% and only five inventory days remain.”
+
+The charts compare the model's most-likely alternative with recorded human choices and show confidence on logged decisions. These are descriptive views of prototype data, not claims of validated model accuracy.
+
 ## Run backend tests
 From the `backend` directory:
 ```bash

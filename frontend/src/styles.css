@@ -70,3 +70,59 @@ h1{font-size:clamp(28px,4vw,44px);line-height:1.12;margin:9px 0 8px;letter-spaci
 .graph-edge small{font-size:9px;color:#888}.graph-edge code{font-size:9px;color:#afa07e;overflow-wrap:anywhere;white-space:pre-wrap}
 .graph-columns{grid-template-columns:.9fr 1.1fr}
 @media(max-width:800px){.layer-nav,.pipeline-nav{grid-template-columns:1fr}.twin-summary{grid-template-columns:1fr}.update-form,.outcome-form{grid-template-columns:1fr}.feedback-form .wide-field{grid-column:auto}.record-heading{align-items:flex-start;flex-direction:column}}
+.prediction-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin:18px 0}
+.prediction-metric-card{display:flex;flex-direction:column;justify-content:center;min-height:145px;padding:20px;background:#191e28;border:1px solid #323844;border-radius:8px}
+.prediction-metric-card .eyebrow{color:#93a4ba;font-size:9px}
+.prediction-metric-card strong{margin:18px 0 8px;color:#f5f7fa;font:700 30px 'DM Mono',monospace}
+.prediction-metric-card small{color:#818b9b;font-size:10px;line-height:1.5}
+.prediction-chart-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.prediction-chart-panel{min-width:0;background:linear-gradient(145deg,#1a202b,#171b23);border-color:#303744}
+.chart-heading{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.chart-heading h3{margin:0 0 5px}
+.chart-heading .hint{margin:0 0 14px}
+.chart-period{flex-shrink:0;color:#aab5c5;font:9px 'DM Mono',monospace;letter-spacing:.5px}
+.chart-scroll{width:100%;overflow-x:auto}
+.dashboard-chart{display:block;width:100%;min-width:500px;height:auto;overflow:visible}
+.chart-gridline{stroke:#2d3542;stroke-width:1}
+.chart-axis-label{fill:#8993a2;font:10px Manrope,system-ui,sans-serif}
+.chart-legend{fill:#9aa3b0;font:10px Manrope,system-ui,sans-serif}
+.chart-bar-predicted{fill:#3188bd}
+.chart-bar-actual{fill:#f18419}
+.chart-line-predicted{fill:none;stroke:#ef493e;stroke-width:2.5}
+.chart-line-actual{fill:none;stroke:#f59e35;stroke-width:2;stroke-dasharray:6 4}
+.chart-dot-predicted{fill:#ef493e;stroke:#202630;stroke-width:2}
+.chart-dot-actual{fill:#f59e35;stroke:#202630;stroke-width:2}
+.chart-empty{display:grid;place-items:center;min-height:230px;color:#7f8998;font-size:12px;text-align:center}
+.demo-input-card{display:flex;justify-content:space-between;align-items:center;gap:16px;margin:16px 0;padding:13px 15px;background:#1a2029;border:1px solid #343d49;border-radius:7px}
+.demo-input-card>div{display:flex;flex-direction:column;gap:5px}
+.demo-input-card b{font-size:11px;color:#e5e9ef}
+.demo-input-card small{color:#8e99a8;font-size:10px;line-height:1.5}
+.demo-input-card .eyebrow{color:#91a4bc;font-size:9px}
+.demo-input-card button{flex-shrink:0}
+.graph-network-panel{background:linear-gradient(145deg,#1a202b,#171b23);border-color:#303744}
+.graph-toolbar{display:flex;justify-content:space-between;align-items:flex-start;gap:18px;margin-bottom:12px}
+.graph-toolbar h3{margin:0 0 6px}
+.graph-toolbar .hint{margin:0;max-width:440px}
+.graph-controls{display:flex;gap:9px;flex-wrap:wrap}
+.graph-controls label{display:flex;flex-direction:column;gap:5px;color:#8f9aaa;font-size:9px}
+.graph-controls select,.graph-controls input{min-width:100px;background:#111720;border:1px solid #384150;border-radius:5px;padding:8px;color:#e6eaf0;font:10px Manrope,system-ui,sans-serif}
+.graph-controls input{width:135px}
+.graph-network-wrap{min-width:0}
+.graph-network-canvas{width:100%;max-height:620px;overflow:auto;background:radial-gradient(ellipse at center,#1d2531,#141922 72%);border:1px solid #2d3542;border-radius:7px}
+.graph-network-canvas svg{display:block;width:100%;min-width:700px;height:auto}
+.graph-network-edge{fill:none;stroke:#667181;stroke-width:1;opacity:.38;transition:opacity .15s,stroke .15s}
+.graph-network-edge.connected{stroke:#f1b34f;stroke-width:1.8;opacity:.95}
+.graph-network-node{cursor:pointer;transition:opacity .15s}
+.graph-network-node circle{stroke:#151a22;stroke-width:3;transition:r .15s,stroke .15s}
+.graph-network-node:hover circle,.graph-network-node.focused circle{stroke:#f4c66f;stroke-width:3.5}
+.graph-network-node:focus{outline:none}
+.graph-network-node.dimmed{opacity:.3}
+.graph-network-initial{fill:#131821;font:700 10px 'DM Mono',monospace;pointer-events:none}
+.graph-network-label{fill:#d7deea;font:9px Manrope,system-ui,sans-serif;pointer-events:none;paint-order:stroke;stroke:#171d26;stroke-width:3px;stroke-linejoin:round}
+.graph-legend{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:12px 2px 0}
+.graph-legend span{display:inline-flex;align-items:center;gap:5px;color:#9da6b4;font-size:9px}
+.graph-legend i{width:8px;height:8px;border-radius:50%}
+.graph-legend small{margin-left:auto;color:#718096;font:9px 'DM Mono',monospace}
+.outcome-demo-button{grid-column:1}
+@media(max-width:900px){.prediction-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.prediction-chart-grid{grid-template-columns:1fr}.graph-toolbar{flex-direction:column}}
+@media(max-width:600px){.prediction-metrics{grid-template-columns:1fr 1fr}.prediction-metric-card{min-height:120px;padding:14px}.prediction-metric-card strong{font-size:23px}.demo-input-card{align-items:flex-start;flex-direction:column}.graph-controls{width:100%}.graph-controls label{flex:1}.graph-legend small{width:100%;margin-left:0}.outcome-demo-button{grid-column:auto}}

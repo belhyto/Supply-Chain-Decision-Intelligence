@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 
@@ -174,14 +174,17 @@ function KnowledgeGraphLayer({ scenarioId }) {
   const [graph, setGraph] = useState(null);
   const [focusedNode, setFocusedNode] = useState(null);
   const [neighbors, setNeighbors] = useState(null);
+  const [depth, setDepth] = useState(1);
+  const [nodeTypeFilter, setNodeTypeFilter] = useState("Alternative");
+  const [nodeSearch, setNodeSearch] = useState("");
   const [contextName, setContextName] = useState("");
   const [contextType, setContextType] = useState("external_condition");
   const [contextDescription, setContextDescription] = useState("");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
 
-  async function loadGraph() {
-    const response = await fetch(`/api/context-graph?scenario_id=${encodeURIComponent(scenarioId)}&depth=5`);
+  async function loadGraph(requestedDepth = depth) {
+    const response = await fetch(`/api/context-graph?scenario_id=${encodeURIComponent(scenarioId)}&depth=${requestedDepth}`);
     const body = await response.json();
     if (!response.ok) throw new Error(body.detail ?? "Context graph could not be loaded.");
     setGraph(body);
@@ -192,7 +195,7 @@ function KnowledgeGraphLayer({ scenarioId }) {
   useEffect(() => {
     setError("");
     loadGraph().catch(loadError => setError(loadError.message));
-  }, [scenarioId]);
+  }, [scenarioId, depth]);
 
   async function inspectNode(nodeId) {
     setError("");
@@ -233,13 +236,37 @@ function KnowledgeGraphLayer({ scenarioId }) {
     await loadGraph();
   }
 
+  function fillSampleContext() {
+    setContextName("Primary supplier disruption");
+    setContextType("event");
+    setContextDescription("Primary supplier unavailable; demand is up 30% and only five inventory days remain.");
+  }
+
   const selectedNode = neighbors?.node ?? graph?.nodes.find(node => node.id === focusedNode);
+  const graphTypes = [...new Set((graph?.nodes ?? []).map(node => node.type))].sort();
   return <>
     <section className="section-heading"><div><div className="eyebrow">KNOWLEDGE & MEMORY LAYER</div><h2>Bidirectional context graph</h2></div><div className="badge">POSTGRESQL + NETWORKX</div></section>
     <p className="intro">Explore how this situation connects to parameters, alternatives, criteria, preferences, assessments, predictions, decisions, context, and outcomes. Relationships are stored once with their semantic direction and can be traversed from either endpoint.</p>
     <section className="panel graph-metrics"><div><span className="eyebrow">NODES IN SCENARIO GRAPH</span><b>{graph?.node_count ?? "…"}</b></div><div><span className="eyebrow">RELATIONSHIPS</span><b>{graph?.relationship_count ?? "…"}</b></div><div><span className="eyebrow">TRAVERSAL</span><b>Bidirectional</b></div></section>
     {error && <div className="error">{error}</div>}
     {notice && <p className="success-message">{notice}</p>}
+    <section className="panel graph-network-panel">
+      <div className="graph-toolbar">
+        <div><h3>Scenario context network</h3><p className="hint">Select a node to inspect its neighbors. Arrows show stored relationship direction; traversal remains bidirectional.</p></div>
+        <div className="graph-controls">
+          <label>Depth<select value={depth} onChange={event => setDepth(Number(event.target.value))}>{[1, 2, 3, 4, 5].map(value => <option key={value} value={value}>{value} hop{value === 1 ? "" : "s"}</option>)}</select></label>
+          <label>Node type<select value={nodeTypeFilter} onChange={event => setNodeTypeFilter(event.target.value)}><option value="all">All types</option>{graphTypes.map(type => <option key={type} value={type}>{type}</option>)}</select></label>
+          <label>Find node<input value={nodeSearch} onChange={event => setNodeSearch(event.target.value)} placeholder="Search name" /></label>
+        </div>
+      </div>
+      {graph?.nodes.length ? <GraphNetwork
+        graph={graph}
+        focusedNode={focusedNode}
+        onSelect={inspectNode}
+        nodeTypeFilter={nodeTypeFilter}
+        nodeSearch={nodeSearch}
+      /> : <p className="chart-empty">No graph nodes are available for this scenario.</p>}
+    </section>
     <div className="two-col graph-columns">
       <section className="panel">
         <h3>Scenario nodes</h3>
@@ -259,6 +286,10 @@ function KnowledgeGraphLayer({ scenarioId }) {
       return <article className="data-card" key={relationship.id}><span className="eyebrow">SIMILAR_TO · score {relationship.properties.score}</span><h4>{related?.name ?? relatedId}</h4><p>{related?.properties.decision_conflict}</p><small>{relationship.provenance}</small></article>;
     })}</div></section>
     <section className="panel"><h3>Add operational context</h3><p className="hint">Attach a constraint, event, policy, external condition, evidence item, or data source to the current situation. The node and HAS_CONTEXT relation are persisted in PostgreSQL.</p>
+      <div className="demo-input-card">
+        <div><span className="eyebrow">DEMO CONTEXT</span><b>Event · Primary supplier disruption</b><small>Primary supplier unavailable; demand is up 30% and only five inventory days remain.</small></div>
+        <button type="button" className="secondary-button" onClick={fillSampleContext}>Fill sample context</button>
+      </div>
       <form className="update-form" onSubmit={addContext}>
         <label>Context name<input value={contextName} onChange={event => setContextName(event.target.value)} required /></label>
         <label>Context type<select value={contextType} onChange={event => setContextType(event.target.value)}><option value="constraint">Constraint</option><option value="event">Event</option><option value="policy">Policy</option><option value="external_condition">External condition</option><option value="evidence">Evidence</option><option value="source">Source</option></select></label>
@@ -267,6 +298,211 @@ function KnowledgeGraphLayer({ scenarioId }) {
       </form>
     </section>
   </>;
+}
+
+const GRAPH_COLORS = {
+  Situation: "#f5a623",
+  Parameter: "#e5bd52",
+  Alternative: "#47b889",
+  Criterion: "#a77beb",
+  DecisionMaker: "#8e83f7",
+  Preference: "#de78a8",
+  Assessment: "#59b9a2",
+  DecisionEvent: "#55a8db",
+  Prediction: "#4b91d0",
+  Decision: "#f08c68",
+  Outcome: "#92c76e",
+  Context: "#a7adb7"
+};
+
+function GraphNetwork({ graph, focusedNode, onSelect, nodeTypeFilter, nodeSearch }) {
+  const visibleNodes = useMemo(() => graph.nodes.filter(node => {
+    const isRoot = node.id === graph.root;
+    const matchesType = nodeTypeFilter === "all" || node.type === nodeTypeFilter;
+    const matchesSearch = !nodeSearch || node.name.toLowerCase().includes(nodeSearch.toLowerCase());
+    return isRoot || (matchesType && matchesSearch);
+  }), [graph, nodeTypeFilter, nodeSearch]);
+  const visibleIds = useMemo(() => new Set(visibleNodes.map(node => node.id)), [visibleNodes]);
+  const visibleRelationships = useMemo(
+    () => graph.relationships.filter(relationship => visibleIds.has(relationship.source) && visibleIds.has(relationship.target)),
+    [graph, visibleIds]
+  );
+  const positions = useMemo(
+    () => layoutGraph(visibleNodes, visibleRelationships, graph.root),
+    [visibleNodes, visibleRelationships, graph.root]
+  );
+  const showLabels = visibleNodes.length <= 16;
+  const connectedNodes = new Set(visibleRelationships
+    .filter(relationship => relationship.source === focusedNode || relationship.target === focusedNode)
+    .flatMap(relationship => [relationship.source, relationship.target]));
+  const edgeGroups = new Map();
+  for (const relationship of visibleRelationships) {
+    const pair = [relationship.source, relationship.target].sort().join("::");
+    edgeGroups.set(pair, (edgeGroups.get(pair) ?? 0) + 1);
+  }
+  const edgeIndexes = new Map();
+
+  return <div className="graph-network-wrap">
+    <div className="graph-network-canvas">
+      <svg viewBox="0 0 1040 560" role="img" aria-label="Interactive context graph network">
+        <defs>
+          <marker id="graph-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L8,4 L0,8 z" fill="#77808e" />
+          </marker>
+        </defs>
+        {visibleRelationships.map(relationship => {
+          const source = positions.get(relationship.source);
+          const target = positions.get(relationship.target);
+          if (!source || !target) return null;
+          const pair = [relationship.source, relationship.target].sort().join("::");
+          const count = edgeGroups.get(pair) ?? 1;
+          const index = edgeIndexes.get(pair) ?? 0;
+          edgeIndexes.set(pair, index + 1);
+          const dx = target.x - source.x;
+          const dy = target.y - source.y;
+          const length = Math.max(1, Math.hypot(dx, dy));
+          const offset = (index - (count - 1) / 2) * 10;
+          const startX = source.x + dx / length * 20;
+          const startY = source.y + dy / length * 20;
+          const endX = target.x - dx / length * 22;
+          const endY = target.y - dy / length * 22;
+          const controlX = (startX + endX) / 2 - dy / length * offset;
+          const controlY = (startY + endY) / 2 + dx / length * offset;
+          const isConnected = focusedNode === relationship.source || focusedNode === relationship.target;
+          return <path
+            key={relationship.id}
+            d={`M ${startX} ${startY} Q ${controlX} ${controlY} ${endX} ${endY}`}
+            className={`graph-network-edge ${isConnected ? "connected" : ""}`}
+            markerEnd="url(#graph-arrow)"
+          ><title>{relationship.type}: {relationship.source} → {relationship.target}</title></path>;
+        })}
+        {visibleNodes.map(node => {
+          const point = positions.get(node.id);
+          if (!point) return null;
+          const isFocused = focusedNode === node.id;
+          const isHighlighted = isFocused || connectedNodes.has(node.id);
+          const label = node.name.length > 22 ? `${node.name.slice(0, 20)}…` : node.name;
+          return <g
+            key={node.id}
+            className={`graph-network-node ${isFocused ? "focused" : ""} ${focusedNode && !isHighlighted ? "dimmed" : ""}`}
+            transform={`translate(${point.x} ${point.y})`}
+            role="button"
+            tabIndex="0"
+            aria-label={`${node.type}: ${node.name}`}
+            onClick={() => onSelect(node.id)}
+            onKeyDown={event => {
+              if (event.key === "Enter" || event.key === " ") onSelect(node.id);
+            }}
+          >
+            <title>{node.type} · {node.name} · {node.provenance ?? "unknown provenance"}</title>
+            <circle r={isFocused ? 21 : 17} fill={GRAPH_COLORS[node.type] ?? "#a7adb7"} />
+            <text className="graph-network-initial" textAnchor="middle" y="4">{node.type.slice(0, 1)}</text>
+            {(showLabels || isFocused) && <text className="graph-network-label" textAnchor="middle" y="32">{label}</text>}
+          </g>;
+        })}
+      </svg>
+    </div>
+    <div className="graph-legend">
+      {[...new Set(visibleNodes.map(node => node.type))].sort().map(type => <span key={type}>
+        <i style={{ backgroundColor: GRAPH_COLORS[type] ?? "#a7adb7" }} />{type}
+      </span>)}
+      <small>{visibleNodes.length} nodes · {visibleRelationships.length} relationships</small>
+    </div>
+  </div>;
+}
+
+function layoutGraph(nodes, relationships, rootId) {
+  const width = 1040;
+  const height = 560;
+  const center = { x: width / 2, y: height / 2 };
+  const adjacency = new Map(nodes.map(node => [node.id, new Set()]));
+  for (const relationship of relationships) {
+    adjacency.get(relationship.source)?.add(relationship.target);
+    adjacency.get(relationship.target)?.add(relationship.source);
+  }
+  const distance = new Map([[rootId, 0]]);
+  const queue = [rootId];
+  while (queue.length) {
+    const current = queue.shift();
+    for (const neighbor of adjacency.get(current) ?? []) {
+      if (!distance.has(neighbor)) {
+        distance.set(neighbor, distance.get(current) + 1);
+        queue.push(neighbor);
+      }
+    }
+  }
+
+  const sortedNodes = [...nodes].sort((left, right) =>
+    (distance.get(left.id) ?? 99) - (distance.get(right.id) ?? 99)
+    || left.type.localeCompare(right.type)
+    || left.name.localeCompare(right.name)
+  );
+  const positions = new Map();
+  let angleIndex = 0;
+  for (const node of sortedNodes) {
+    if (node.id === rootId) {
+      positions.set(node.id, { ...center });
+      continue;
+    }
+    const angle = angleIndex++ * 2.399963229728653;
+    const ring = Math.min(280, 100 + (distance.get(node.id) ?? 1) * 82);
+    positions.set(node.id, {
+      x: center.x + Math.cos(angle) * ring,
+      y: center.y + Math.sin(angle) * ring
+    });
+  }
+
+  const uniqueEdges = new Map();
+  for (const relationship of relationships) {
+    const key = [relationship.source, relationship.target].sort().join("::");
+    uniqueEdges.set(key, [relationship.source, relationship.target]);
+  }
+  const edges = [...uniqueEdges.values()];
+  for (let iteration = 0; iteration < 70; iteration += 1) {
+    const forces = new Map(nodes.map(node => [node.id, { x: 0, y: 0 }]));
+    for (let leftIndex = 0; leftIndex < sortedNodes.length; leftIndex += 1) {
+      for (let rightIndex = leftIndex + 1; rightIndex < sortedNodes.length; rightIndex += 1) {
+        const left = sortedNodes[leftIndex];
+        const right = sortedNodes[rightIndex];
+        const a = positions.get(left.id);
+        const b = positions.get(right.id);
+        const dx = a.x - b.x;
+        const dy = a.y - b.y;
+        const distanceSquared = Math.max(100, dx * dx + dy * dy);
+        const magnitude = 5200 / distanceSquared;
+        const forceX = dx * magnitude;
+        const forceY = dy * magnitude;
+        forces.get(left.id).x += forceX;
+        forces.get(left.id).y += forceY;
+        forces.get(right.id).x -= forceX;
+        forces.get(right.id).y -= forceY;
+      }
+    }
+    for (const [sourceId, targetId] of edges) {
+      const source = positions.get(sourceId);
+      const target = positions.get(targetId);
+      const dx = target.x - source.x;
+      const dy = target.y - source.y;
+      const distanceBetween = Math.max(1, Math.hypot(dx, dy));
+      const targetDistance = sourceId === rootId || targetId === rootId ? 150 : 100;
+      const magnitude = (distanceBetween - targetDistance) * 0.008;
+      const forceX = dx / distanceBetween * magnitude;
+      const forceY = dy / distanceBetween * magnitude;
+      forces.get(sourceId).x += forceX;
+      forces.get(sourceId).y += forceY;
+      forces.get(targetId).x -= forceX;
+      forces.get(targetId).y -= forceY;
+    }
+    const cooling = 0.16 * (1 - iteration / 80);
+    for (const node of sortedNodes) {
+      if (node.id === rootId) continue;
+      const point = positions.get(node.id);
+      const force = forces.get(node.id);
+      point.x = Math.min(width - 30, Math.max(30, point.x + force.x * cooling));
+      point.y = Math.min(height - 35, Math.max(30, point.y + force.y * cooling));
+    }
+  }
+  return positions;
 }
 
 function PhysicalLayer({ physical, options }) {
@@ -449,6 +685,10 @@ function FeedbackLayer({ data, records, onChanged, scenarioId }) {
   return <>
     <section className="section-heading"><div><div className="eyebrow">LAYER 04 · DECISION FEEDBACK</div><h2>Decision and outcome learning loop</h2></div><div className="badge">{records.some(record => record.scenario_id === scenarioId) ? "HUMAN DECISION RECORDED" : "HUMAN DECISION REQUIRED"}</div></section>
     <p className="intro">Generate and persist a model prediction, record the human's actual choice separately, then attach the observed operational outcome. Differences are retained as decision evidence—not treated as errors.</p>
+    <PredictionDashboard
+      prediction={prediction}
+      records={records.filter(record => record.scenario_id === scenarioId)}
+    />
     <section className="panel">
       <h3>Model prediction</h3>
       <label className="feedback-decision-maker">Decision-maker<select value={decisionMakerId} onChange={event => setDecisionMakerId(event.target.value)}>{data.decision_makers.map(person => <option key={person.id} value={person.id}>{person.name} · {person.role}</option>)}</select></label>
@@ -464,6 +704,13 @@ function FeedbackLayer({ data, records, onChanged, scenarioId }) {
         </div>)}
         <p className="hint">{prediction.model.name} · prediction {prediction.prediction_run_id} · {prediction.disclaimer}</p>
       </div>}
+      <div className="demo-input-card">
+        <div><span className="eyebrow">DEMO INPUT · SCN-001</span><b>Procurement Manager → Supplier A</b><small>Select SCN-001 and Procurement Manager. Rationale: “Supplier A meets the cost requirement while staying within the ₹20 lakh budget.”</small></div>
+        <button type="button" className="secondary-button" disabled={scenarioId !== "SCN-001" || decisionMakerId !== "DM-01" || decisionRecorded} onClick={() => {
+          setChosenOptionId("SUP-A");
+          setRationale("Supplier A meets the cost requirement while staying within the ₹20 lakh budget.");
+        }}>Fill sample decision</button>
+      </div>
       {prediction && decisionRecorded && <button type="button" className="secondary-button new-prediction-button" onClick={loadPrediction}>Generate another prediction</button>}
       <form className="update-form feedback-form" onSubmit={createDecision}>
         <label>Human's actual choice<select value={chosenOptionId} onChange={event => setChosenOptionId(event.target.value)} required disabled={!prediction || loadingPrediction || decisionRecorded}>
@@ -478,6 +725,154 @@ function FeedbackLayer({ data, records, onChanged, scenarioId }) {
     </section>
     <section className="panel"><h3>Recorded decisions & observed outcomes</h3>{records.filter(record => record.scenario_id === scenarioId).length === 0 ? <p className="hint">No human decisions have been recorded for this scenario yet.</p> : records.filter(record => record.scenario_id === scenarioId).map(record => <DecisionRecord key={record.id} record={record} onChanged={onChanged} />)}</section>
   </>;
+}
+
+function PredictionDashboard({ prediction, records }) {
+  const agreementCount = records.filter(record => record.choice_matches_prediction).length;
+  const agreementRate = records.length ? agreementCount / records.length * 100 : null;
+  const outcomesCount = records.filter(record => record.outcome).length;
+  const countRows = new Map();
+  for (const option of prediction?.probabilities ?? []) {
+    countRows.set(option.alternative_name, {
+      name: option.alternative_name,
+      predicted: 0,
+      actual: 0,
+      currentTop: option.alternative_code === prediction.predicted_choice
+    });
+  }
+  for (const record of records) {
+    for (const name of [record.predicted_choice, record.chosen_option_name]) {
+      if (name && !countRows.has(name)) {
+        countRows.set(name, { name, predicted: 0, actual: 0, currentTop: false });
+      }
+    }
+    const predicted = countRows.get(record.predicted_choice);
+    const actual = countRows.get(record.chosen_option_name);
+    if (predicted) predicted.predicted += 1;
+    if (actual) actual.actual += 1;
+  }
+  const countData = [...countRows.values()].map(row => ({
+    ...row,
+    predicted: row.predicted + Number(row.currentTop)
+  }));
+  const recentRecords = [...records]
+    .sort((left, right) => new Date(left.timestamp) - new Date(right.timestamp))
+    .slice(-8);
+  const trendData = recentRecords.map((record, index) => ({
+    label: String(index + 1).padStart(2, "0"),
+    predicted: record.predicted_choice_probability_percent,
+    selected: record.chosen_option_probability_percent
+  }));
+  if (prediction?.probabilities?.length) {
+    trendData.push({
+      label: "NOW",
+      predicted: prediction.probabilities[0].probability_percent,
+      selected: null
+    });
+  }
+
+  return <>
+    <section className="prediction-metrics">
+      <MetricCard title="Predictions in view" value={records.length + Number(Boolean(prediction))} detail="Current model run + recorded cases" />
+      <MetricCard title="Human decisions" value={records.length} detail="Separately recorded choices" />
+      <MetricCard title="Observed agreement" value={agreementRate === null ? "—" : `${agreementRate.toFixed(1)}%`} detail="Logged decisions only · not model accuracy" />
+      <MetricCard title="Outcomes captured" value={outcomesCount} detail={records.length ? `Of ${records.length} human decisions` : "No outcomes recorded yet"} />
+    </section>
+    <div className="prediction-chart-grid">
+      <section className="panel prediction-chart-panel">
+        <div className="chart-heading"><div><h3>Most-likely predictions vs. human choices</h3><p className="hint">Counts by alternative. The current model run contributes its top-ranked choice.</p></div><span className="chart-period">CURRENT SCENARIO</span></div>
+        {countData.length ? <PredictionActualChart rows={countData} /> : <p className="chart-empty">Generate a model prediction or record a decision to populate this chart.</p>}
+      </section>
+      <section className="panel prediction-chart-panel">
+        <div className="chart-heading"><div><h3>Prediction confidence over decisions</h3><p className="hint">Top-choice confidence compared with the probability assigned to each human-selected alternative.</p></div><span className="chart-period">LATEST 8 + LIVE</span></div>
+        {trendData.length ? <ProbabilityTrendChart points={trendData} /> : <p className="chart-empty">Probability history will appear here after decisions are recorded.</p>}
+      </section>
+    </div>
+  </>;
+}
+
+function MetricCard({ title, value, detail }) {
+  return <article className="prediction-metric-card">
+    <span className="eyebrow">{title}</span>
+    <strong>{value}</strong>
+    <small>{detail}</small>
+  </article>;
+}
+
+function PredictionActualChart({ rows }) {
+  const width = 720;
+  const height = 300;
+  const margin = { top: 20, right: 20, bottom: 62, left: 44 };
+  const plotWidth = width - margin.left - margin.right;
+  const plotHeight = height - margin.top - margin.bottom;
+  const maximum = Math.max(1, ...rows.map(row => Math.max(row.predicted, row.actual)));
+  const groupWidth = plotWidth / rows.length;
+  const barWidth = Math.min(34, groupWidth * 0.28);
+  const y = value => margin.top + plotHeight - value / maximum * plotHeight;
+  const ticks = [0, maximum / 2, maximum];
+
+  return <div className="chart-scroll">
+    <svg className="dashboard-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Bar chart comparing most-likely predictions and human choices">
+      {ticks.map(tick => <g key={tick}>
+        <line x1={margin.left} x2={width - margin.right} y1={y(tick)} y2={y(tick)} className="chart-gridline" />
+        <text x={margin.left - 8} y={y(tick) + 4} textAnchor="end" className="chart-axis-label">{Number.isInteger(tick) ? tick : tick.toFixed(1)}</text>
+      </g>)}
+      {rows.map((row, index) => {
+        const center = margin.left + groupWidth * (index + 0.5);
+        const predictedX = center - barWidth - 2;
+        const actualX = center + 2;
+        return <g key={row.name}>
+          <title>{row.name} · predicted top choice: {row.predicted} · human choice: {row.actual}</title>
+          <rect x={predictedX} y={y(row.predicted)} width={barWidth} height={Math.max(1, margin.top + plotHeight - y(row.predicted))} rx="3" className="chart-bar-predicted" />
+          <rect x={actualX} y={y(row.actual)} width={barWidth} height={Math.max(1, margin.top + plotHeight - y(row.actual))} rx="3" className="chart-bar-actual" />
+          <text x={center} y={height - 36} textAnchor="middle" className="chart-axis-label">{row.name.length > 12 ? `${row.name.slice(0, 10)}…` : row.name}</text>
+        </g>;
+      })}
+      <g className="chart-legend">
+        <rect x={margin.left + 8} y={height - 15} width="9" height="9" rx="2" className="chart-bar-predicted" />
+        <text x={margin.left + 22} y={height - 7}>Model top choice</text>
+        <rect x={margin.left + 142} y={height - 15} width="9" height="9" rx="2" className="chart-bar-actual" />
+        <text x={margin.left + 156} y={height - 7}>Human choice</text>
+      </g>
+    </svg>
+  </div>;
+}
+
+function ProbabilityTrendChart({ points }) {
+  const width = 720;
+  const height = 300;
+  const margin = { top: 20, right: 20, bottom: 48, left: 44 };
+  const plotWidth = width - margin.left - margin.right;
+  const plotHeight = height - margin.top - margin.bottom;
+  const x = index => margin.left + (points.length <= 1 ? plotWidth / 2 : index * plotWidth / (points.length - 1));
+  const y = value => margin.top + (100 - value) / 100 * plotHeight;
+  const pathFor = key => points
+    .map((point, index) => point[key] === null ? null : `${index === 0 || points[index - 1][key] === null ? "M" : "L"} ${x(index)} ${y(point[key])}`)
+    .filter(Boolean)
+    .join(" ");
+
+  return <div className="chart-scroll">
+    <svg className="dashboard-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Line chart of prediction confidence and chosen-option probability">
+      {[0, 25, 50, 75, 100].map(tick => <g key={tick}>
+        <line x1={margin.left} x2={width - margin.right} y1={y(tick)} y2={y(tick)} className="chart-gridline" />
+        <text x={margin.left - 8} y={y(tick) + 4} textAnchor="end" className="chart-axis-label">{tick}%</text>
+      </g>)}
+      <path d={pathFor("predicted")} className="chart-line-predicted" />
+      <path d={pathFor("selected")} className="chart-line-actual" />
+      {points.map((point, index) => <g key={`${point.label}-${index}`}>
+        <title>{point.label}: model confidence {point.predicted.toFixed(1)}%{point.selected === null ? "" : ` · chosen alternative probability ${point.selected.toFixed(1)}%`}</title>
+        <circle cx={x(index)} cy={y(point.predicted)} r="4" className="chart-dot-predicted" />
+        {point.selected !== null && <circle cx={x(index)} cy={y(point.selected)} r="4" className="chart-dot-actual" />}
+        <text x={x(index)} y={height - 22} textAnchor="middle" className="chart-axis-label">{point.label}</text>
+      </g>)}
+      <g className="chart-legend">
+        <line x1={margin.left + 8} x2={margin.left + 22} y1={height - 7} y2={height - 7} className="chart-line-predicted" />
+        <text x={margin.left + 28} y={height - 3}>Top-choice confidence</text>
+        <line x1={margin.left + 180} x2={margin.left + 194} y1={height - 7} y2={height - 7} className="chart-line-actual" />
+        <text x={margin.left + 200} y={height - 3}>Chosen-option probability</text>
+      </g>
+    </svg>
+  </div>;
 }
 
 function DecisionRecord({ record, onChanged }) {
@@ -509,7 +904,7 @@ function DecisionRecord({ record, onChanged }) {
       <div className="preference-list"><span className="eyebrow">PREFERENCE WEIGHTS</span>{Object.entries(record.preference_weights ?? {}).map(([criterion, weight]) => <span key={criterion}>{criterion}: <b>{(weight * 100).toFixed(0)}%</b></span>)}</div>
     </div>}
     {record.rationale && <p className="record-notes">{record.rationale}</p>}
-    {record.outcome ? <div className="callout"><b>Outcome: {record.outcome.status}</b>{record.outcome.notes && <><br/><small>{record.outcome.notes}</small></>}</div> : <form className="outcome-form" onSubmit={recordOutcome}><label>Observed result<select value={status} onChange={event => setStatus(event.target.value)}><option value="fulfilled">Fulfilled</option><option value="delayed">Delayed</option><option value="partial">Partial</option><option value="failed">Failed</option></select></label><label>Outcome notes<input value={notes} onChange={event => setNotes(event.target.value)} placeholder="Delivery time, quantity, or cost observed" /></label><button type="submit" className="secondary-button">Save outcome</button></form>}
+    {record.outcome ? <div className="callout"><b>Outcome: {record.outcome.status}</b>{record.outcome.notes && <><br/><small>{record.outcome.notes}</small></>}</div> : <form className="outcome-form" onSubmit={recordOutcome}><label>Observed result<select value={status} onChange={event => setStatus(event.target.value)}><option value="fulfilled">Fulfilled</option><option value="delayed">Delayed</option><option value="partial">Partial</option><option value="failed">Failed</option></select></label><label>Outcome notes<input value={notes} onChange={event => setNotes(event.target.value)} placeholder="Delivery time, quantity, or cost observed" /></label><button type="button" className="secondary-button outcome-demo-button" onClick={() => { setStatus("fulfilled"); setNotes("1,200 units arrived before the 7-day deadline; no stockout occurred."); }}>Fill sample outcome</button><button type="submit" className="secondary-button">Save outcome</button></form>}
     {error && <p className="inline-error">{error}</p>}
   </article>;
 }
