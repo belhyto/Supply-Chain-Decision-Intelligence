@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,6 +11,7 @@ from typing import Any
 import joblib
 import numpy as np
 from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import GroupShuffleSplit
@@ -19,6 +21,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.ml.features import extract_feature_row, feature_columns, feature_matrix
+from app.ml.model_registry import (
+    DEFAULT_MODEL_NAME,
+    MODEL_ARTIFACT_PATHS,
+    MODEL_NAMES,
+    ModelName,
+)
 from app.models import (
     Alternative,
     Assessment,
@@ -29,7 +37,7 @@ from app.models import (
     Situation,
 )
 
-MODEL_PATH = Path(__file__).parent / "artifacts" / "choice_model.joblib"
+MODEL_PATH = MODEL_ARTIFACT_PATHS[DEFAULT_MODEL_NAME]
 
 
 class TrainingDataError(ValueError):
@@ -47,66 +55,83 @@ class TrainingDataset:
     categorical_features: tuple[str, ...]
 
 
-def load_training_dataset(session: Session) -> TrainingDataset:
+def load_training_dataset(
+    session: Session,
+    decision_source: str = "synthetic",
+) -> TrainingDataset:
+    decisions = session.scalars(
+        select(Decision).where(
+            Decision.data_source == decision_source,
+            Decision.label_source == decision_source,
+        )
+    ).all()
+    if not decisions:
+        raise TrainingDataError(f"No {decision_source} human decision records are available.")
+
+    event_ids = {decision.decision_event_id for decision in decisions}
+    events = {
+        row.id: row
+        for row in session.scalars(
+            select(DecisionEvent).where(DecisionEvent.id.in_(event_ids))
+        ).all()
+    }
+    situation_ids = {event.situation_id for event in events.values()}
+    decision_maker_ids = {event.decision_maker_id for event in events.values()}
+    preference_ids = {
+        event.preference_id for event in events.values()
+        if event.preference_id is not None
+    }
     situations = {
         row.id: row
         for row in session.scalars(
-            select(Situation).where(Situation.data_source == "synthetic")
+            select(Situation).where(Situation.id.in_(situation_ids))
         ).all()
     }
     decision_makers = {
         row.id: row
         for row in session.scalars(
-            select(DecisionMaker).where(DecisionMaker.data_source == "synthetic")
+            select(DecisionMaker).where(DecisionMaker.id.in_(decision_maker_ids))
         ).all()
     }
     preferences = {
         row.id: row
         for row in session.scalars(
-            select(Preference).where(Preference.data_source == "synthetic")
+            select(Preference).where(Preference.id.in_(preference_ids))
         ).all()
     }
-    events = {
-        row.id: row
-        for row in session.scalars(
-            select(DecisionEvent).where(DecisionEvent.data_source == "synthetic")
-        ).all()
-    }
-    alternatives = session.scalars(
-        select(Alternative)
-        .where(Alternative.data_source == "synthetic")
-        .order_by(Alternative.situation_id, Alternative.code)
-    ).all()
-    assessments = session.scalars(
-        select(Assessment)
-        .where(
+    alternatives_query = select(Alternative).where(Alternative.situation_id.in_(situation_ids))
+    assessments_query = select(Assessment).where(Assessment.situation_id.in_(situation_ids))
+    if decision_source == "synthetic":
+        alternatives_query = alternatives_query.where(Alternative.data_source == "synthetic")
+        assessments_query = assessments_query.where(
             Assessment.data_source == "synthetic",
             Assessment.assessment_version == 1,
         )
-        .order_by(Assessment.alternative_id)
+    alternatives = session.scalars(
+        alternatives_query.order_by(Alternative.situation_id, Alternative.code)
     ).all()
-    decisions = session.scalars(
-        select(Decision).where(
-            Decision.data_source == "synthetic",
-            Decision.label_source == "synthetic",
+    assessments = session.scalars(
+        assessments_query.order_by(
+            Assessment.alternative_id,
+            Assessment.assessment_version.desc(),
+            Assessment.id.desc(),
         )
     ).all()
 
     alternatives_by_situation: dict[str, list[Alternative]] = {}
     for alternative in alternatives:
         alternatives_by_situation.setdefault(alternative.situation_id, []).append(alternative)
-    scores_by_alternative = {
-        assessment.alternative_id: assessment.criterion_scores
-        for assessment in assessments
-    }
+    scores_by_alternative = {}
+    for assessment in assessments:
+        scores_by_alternative.setdefault(assessment.alternative_id, assessment.criterion_scores)
     alternative_codes = tuple(sorted({alternative.code for alternative in alternatives}))
     if len(alternative_codes) != 3:
-        raise TrainingDataError("Training data must define exactly three alternative classes.")
+        raise TrainingDataError("The training records must define exactly three alternative classes.")
     if not scores_by_alternative:
-        raise TrainingDataError("No synthetic suitability assessments are stored.")
+        raise TrainingDataError("No suitability assessments are stored for the selected decision records.")
     criteria = tuple(sorted(next(iter(scores_by_alternative.values()))))
     if not criteria:
-        raise TrainingDataError("Synthetic assessments do not contain criterion scores.")
+        raise TrainingDataError("Suitability assessments do not contain criterion scores.")
 
     rows: list[dict[str, Any]] = []
     labels: list[str] = []
@@ -115,14 +140,14 @@ def load_training_dataset(session: Session) -> TrainingDataset:
         event = events.get(decision.decision_event_id)
         if event is None:
             raise TrainingDataError(
-                f"Synthetic decision {decision.id} has no synthetic decision event."
+                f"Decision {decision.id} has no linked decision event."
             )
         situation = situations.get(event.situation_id)
         decision_maker = decision_makers.get(event.decision_maker_id)
         preference = preferences.get(event.preference_id) if event.preference_id is not None else None
         if situation is None or decision_maker is None or preference is None:
             raise TrainingDataError(
-                f"Synthetic decision event {event.id} is missing its situation, decision-maker, or preference."
+                f"Decision event {event.id} is missing its situation, decision-maker, or preference."
             )
 
         scenario_alternatives = alternatives_by_situation.get(situation.id, [])
@@ -134,17 +159,36 @@ def load_training_dataset(session: Session) -> TrainingDataset:
             )
 
         feature_alternatives = []
+        decision_snapshot = event.event_context.get("reasoning_snapshot", {})
+        scenario_snapshot = decision_snapshot.get("situation", {})
+        human_reasoning = event.event_context.get("human_reasoning", {})
+        role_at_decision = decision_snapshot.get("decision_maker", {}).get(
+            "role",
+            decision_maker.role,
+        )
+        preferences_at_decision = human_reasoning.get(
+            "preference_weights",
+            decision_snapshot.get("preference_weights", preference.weights),
+        )
+        snapshot_alternatives = {
+            item["code"]: item
+            for item in decision_snapshot.get("alternatives", [])
+        }
         for alternative in scenario_alternatives:
-            criterion_scores = scores_by_alternative.get(alternative.id)
+            snapshot_alternative = snapshot_alternatives.get(alternative.code, {})
+            criterion_scores = snapshot_alternative.get(
+                "criterion_scores",
+                scores_by_alternative.get(alternative.id),
+            )
             if criterion_scores is None:
                 raise TrainingDataError(
-                    f"Alternative {alternative.id} has no synthetic suitability assessment."
+                    f"Alternative {alternative.id} has no suitability assessment."
                 )
             feature_alternatives.append({
                 "code": alternative.code,
                 "scores": criterion_scores,
-                "available": alternative.is_available,
-                "attributes": alternative.attributes,
+                "available": snapshot_alternative.get("available", alternative.is_available),
+                "attributes": snapshot_alternative.get("attributes", alternative.attributes),
             })
 
         chosen_alternative = next(
@@ -160,9 +204,9 @@ def load_training_dataset(session: Session) -> TrainingDataset:
             )
 
         rows.append(extract_feature_row(
-            situation.context_data,
-            decision_maker.role,
-            preference.weights,
+            scenario_snapshot.get("context_data", situation.context_data),
+            role_at_decision,
+            preferences_at_decision,
             feature_alternatives,
             criteria,
             alternative_codes,
@@ -187,28 +231,51 @@ def load_training_dataset(session: Session) -> TrainingDataset:
     )
 
 
-def _build_pipeline(dataset: TrainingDataset) -> Pipeline:
+def _build_pipeline(dataset: TrainingDataset, model_name: ModelName) -> Pipeline:
     numeric_indices = list(range(len(dataset.numeric_features)))
     categorical_indices = list(range(
         len(dataset.numeric_features),
         len(dataset.numeric_features) + len(dataset.categorical_features),
     ))
-    numeric_pipeline = Pipeline(steps=[
+    numeric_steps = [
         ("imputer", SimpleImputer(strategy="median", keep_empty_features=True)),
-        ("scaler", StandardScaler()),
-    ])
+    ]
+    if model_name == "multinomial_logistic_regression":
+        numeric_steps.append(("scaler", StandardScaler()))
+        classifier = LogisticRegression(solver="lbfgs", max_iter=2000)
+    elif model_name == "random_forest":
+        classifier = RandomForestClassifier(
+            n_estimators=300,
+            class_weight="balanced",
+            random_state=42,
+            n_jobs=-1,
+        )
+    else:
+        raise ValueError(f"Unsupported model: {model_name}")
+
+    numeric_pipeline = Pipeline(steps=numeric_steps)
     preprocessor = ColumnTransformer(transformers=[
         ("numeric", numeric_pipeline, numeric_indices),
         ("categorical", OneHotEncoder(handle_unknown="ignore"), categorical_indices),
     ])
     return Pipeline(steps=[
         ("preprocessor", preprocessor),
-        ("classifier", LogisticRegression(solver="lbfgs", max_iter=2000)),
+        ("classifier", classifier),
     ])
 
 
-def train_model(session: Session, model_path: Path = MODEL_PATH) -> dict[str, Any]:
-    dataset = load_training_dataset(session)
+def train_model(
+    session: Session,
+    model_path: Path | None = None,
+    model_name: ModelName = DEFAULT_MODEL_NAME,
+) -> dict[str, Any]:
+    if model_name not in MODEL_ARTIFACT_PATHS:
+        raise ValueError(f"Unsupported model: {model_name}")
+    model_path = model_path or MODEL_ARTIFACT_PATHS[model_name]
+    decision_source = (
+        "observed_human" if model_name == "random_forest" else "synthetic"
+    )
+    dataset = load_training_dataset(session, decision_source=decision_source)
     feature_rows = feature_matrix(
         dataset.rows,
         dataset.numeric_features,
@@ -230,18 +297,18 @@ def train_model(session: Session, model_path: Path = MODEL_PATH) -> dict[str, An
             "The grouped training partition must contain choices for every alternative."
         )
 
-    evaluation_model = _build_pipeline(dataset)
+    evaluation_model = _build_pipeline(dataset, model_name)
     evaluation_model.fit(feature_rows[train_indices], labels[train_indices])
     holdout_accuracy = float(evaluation_model.score(
         feature_rows[test_indices],
         labels[test_indices],
     ))
 
-    model = _build_pipeline(dataset)
+    model = _build_pipeline(dataset, model_name)
     model.fit(feature_rows, labels)
     metadata = {
-        "model_name": "multinomial_logistic_regression",
-        "training_data_source": "synthetic",
+        "model_name": model_name,
+        "training_data_source": decision_source,
         "training_sample_count": len(dataset.rows),
         "training_scenario_count": len(set(dataset.groups)),
         "criteria": list(dataset.criteria),
@@ -260,6 +327,12 @@ def train_model(session: Session, model_path: Path = MODEL_PATH) -> dict[str, An
             "holdout_accuracy": holdout_accuracy,
         },
     }
+    if model_name == "random_forest":
+        metadata["model_parameters"] = {
+            "n_estimators": 300,
+            "class_weight": "balanced",
+            "random_state": 42,
+        }
 
     model_path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = model_path.with_suffix(model_path.suffix + ".tmp")
@@ -274,9 +347,21 @@ def main() -> None:
 
     create_tables()
     with SessionLocal() as session:
-        metadata = train_model(session)
+        metadata = {}
+        for model_name in MODEL_NAMES:
+            try:
+                metadata[model_name] = train_model(session, model_name=model_name)
+            except TrainingDataError as error:
+                if model_name != "random_forest":
+                    raise
+                metadata[model_name] = {
+                    "status": "not_trained",
+                    "reason": str(error),
+                }
+                print(f"Random Forest remains experimental: {error}", file=sys.stderr)
     print(json.dumps(metadata, indent=2))
-    print(f"Model artifact: {MODEL_PATH}")
+    for model_name in MODEL_NAMES:
+        print(f"{model_name} artifact: {MODEL_ARTIFACT_PATHS[model_name]}")
 
 
 if __name__ == "__main__":

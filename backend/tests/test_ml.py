@@ -3,21 +3,22 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 from app import main
-from app.context_graph import seed_context_graph
+from app.context_graph import graph_snapshot, seed_context_graph
 from app.database import Base
 from app.ml.predict import _load_model_cached, load_model, predict_choice
-from app.ml.train import load_training_dataset, train_model
-from app.models import DecisionEvent, Prediction
+from app.ml.train import TrainingDataError, load_training_dataset, train_model
+from app.models import ContextNode, Decision, DecisionEvent, ExtractedRule, ModelExplanation, Prediction
 
 
 class MLChoiceTests(unittest.TestCase):
@@ -39,6 +40,12 @@ class MLChoiceTests(unittest.TestCase):
         Base.metadata.drop_all(self.engine)
         self.engine.dispose()
         self.temporary_directory.cleanup()
+
+    def mark_seeded_choices_as_observed(self):
+        for decision in self.session.query(Decision).all():
+            decision.data_source = "observed_human"
+            decision.label_source = "observed_human"
+        self.session.flush()
 
     def test_feature_rows_include_preferences_and_all_alternative_criterion_scores(self):
         dataset = load_training_dataset(self.session)
@@ -91,6 +98,56 @@ class MLChoiceTests(unittest.TestCase):
         self.assertIn("SUP-A", result["feature_inputs"]["alternative_criterion_scores"])
         self.assertTrue(all(0 <= item["probability"] <= 1 for item in result["probabilities"]))
 
+    def test_grouped_random_forest_model_predicts_probabilities(self):
+        with self.assertRaisesRegex(TrainingDataError, "No observed_human human decision records"):
+            train_model(self.session, self.model_path, model_name="random_forest")
+
+        self.mark_seeded_choices_as_observed()
+        metadata = train_model(
+            self.session,
+            self.model_path,
+            model_name="random_forest",
+        )
+
+        split = metadata["group_split"]
+        self.assertFalse(
+            set(split["training_scenario_ids"]) & set(split["holdout_scenario_ids"])
+        )
+        self.assertEqual(metadata["model_name"], "random_forest")
+        artifact = load_model(self.model_path)
+        model = artifact["pipeline"]
+        self.assertIsInstance(model.named_steps["classifier"], RandomForestClassifier)
+        self.assertEqual(model.named_steps["classifier"].n_estimators, 300)
+        numeric_pipeline = model.named_steps["preprocessor"].named_transformers_["numeric"]
+        self.assertIsInstance(numeric_pipeline.named_steps["imputer"], SimpleImputer)
+        self.assertNotIn("scaler", numeric_pipeline.named_steps)
+
+        result = predict_choice(
+            self.session,
+            "SCN-002",
+            "DM-02",
+            model_path=self.model_path,
+            model_name="random_forest",
+        )
+        self.assertEqual(result["model"]["name"], "random_forest")
+        self.assertEqual(
+            {item["alternative_code"] for item in result["probabilities"]},
+            {"SUP-B", "SUP-C"},
+        )
+        self.assertAlmostEqual(
+            sum(item["probability"] for item in result["probabilities"]),
+            1.0,
+        )
+        self.assertTrue(all(0 <= item["probability"] <= 1 for item in result["probabilities"]))
+        explanation = result["explanation"]
+        self.assertEqual(explanation["kind"], "random_forest_pattern_analysis")
+        self.assertEqual(sum(
+            item["votes"] for item in explanation["tree_vote_summary"].values()
+        ), 300)
+        self.assertTrue(explanation["rule_paths"])
+        self.assertTrue(explanation["top_features"])
+        self.assertIn("not evidence", explanation["rule_path_note"])
+
     def test_fastapi_prediction_endpoint_uses_the_trained_model(self):
         train_model(self.session, self.model_path)
         with patch("app.ml.predict.MODEL_PATH", self.model_path):
@@ -127,6 +184,7 @@ class MLChoiceTests(unittest.TestCase):
                     prediction_event_id=result["prediction_event_id"],
                     chosen_option_id="NOT-IN-PREDICTION",
                     rationale="This option was not presented.",
+                    operational_objective="Meet the replenishment requirement.",
                 ),
                 self.session,
             )
@@ -137,10 +195,21 @@ class MLChoiceTests(unittest.TestCase):
                 prediction_event_id=result["prediction_event_id"],
                 chosen_option_id="SUP-A",
                 rationale="Supplier A meets the cost requirement.",
+                operational_objective="Replenish filters within the delivery deadline and budget.",
+                constraints=["Remain within the available budget."],
+                influencing_factors=["Supplier A has the lowest cost."],
+                reasoning_steps=["Check the budget.", "Confirm the supplier can meet the order."],
+                considered_alternative_codes=["SUP-A", "SUP-B", "SUP-C"],
+                confidence=0.8,
             ),
             self.session,
         )
         self.assertEqual(record["chosen_option_id"], "SUP-A")
+        self.assertEqual(record["reasoning_context"]["rationale_source"], "human_stated")
+        self.assertEqual(
+            record["reasoning_context"]["operational_objective"],
+            "Replenish filters within the delivery deadline and budget.",
+        )
         self.assertEqual(len(record["probabilities"]), 3)
         self.assertEqual(
             record["preference_weights"],
@@ -152,6 +221,16 @@ class MLChoiceTests(unittest.TestCase):
             result["predicted_choice"] == "SUP-A",
         )
         self.assertEqual(event.decision.rationale, "Supplier A meets the cost requirement.")
+        decision_node = self.session.query(ContextNode).filter_by(
+            node_type="HumanStatedReason"
+        ).one()
+        self.assertEqual(decision_node.properties["source"], "human_stated")
+        graph = graph_snapshot(self.session, "SCN-001", depth=3)
+        self.assertTrue(any(node["type"] == "Objective" for node in graph["nodes"]))
+        self.assertTrue(any(
+            relationship["type"] == "HAS_REASONING_STEP"
+            for relationship in graph["relationships"]
+        ))
         self.assertEqual(len(self.session.query(Prediction).filter_by(
             decision_event_id=event.id
         ).all()), 3)
@@ -180,10 +259,76 @@ class MLChoiceTests(unittest.TestCase):
                     prediction_event_id=result["prediction_event_id"],
                     chosen_option_id="SUP-B",
                     rationale="A second choice for the same event.",
+                    operational_objective="Meet the delivery requirement.",
                 ),
                 self.session,
             )
         self.assertEqual(duplicate_error.exception.status_code, 409)
+
+    def test_fastapi_prediction_endpoint_selects_random_forest(self):
+        self.mark_seeded_choices_as_observed()
+        train_model(
+            self.session,
+            self.model_path,
+            model_name="random_forest",
+        )
+        with patch(
+            "app.ml.predict.MODEL_PATHS",
+            {"random_forest": self.model_path},
+        ):
+            result = main.predict_ml_choice(
+                main.MLPredictionRequest(
+                    scenario_id="SCN-001",
+                    decision_maker_id="DM-01",
+                    model_name="random_forest",
+                ),
+                self.session,
+            )
+
+        self.assertEqual(result["model"]["name"], "random_forest")
+        self.assertEqual(len(result["probabilities"]), 3)
+        self.assertTrue(result["persisted"])
+        explanation = self.session.scalar(
+            select(ModelExplanation).where(
+                ModelExplanation.prediction_event_id == result["prediction_event_id"]
+            )
+        )
+        self.assertIsNotNone(explanation)
+        self.assertGreater(len(explanation.rule_paths), 0)
+        self.assertGreater(
+            self.session.query(ExtractedRule).filter_by(
+                prediction_event_id=result["prediction_event_id"]
+            ).count(),
+            0,
+        )
+        graph = graph_snapshot(self.session, "SCN-001", depth=3)
+        self.assertTrue(any(node["type"] == "ModelExplanation" for node in graph["nodes"]))
+        self.assertTrue(any(node["type"] == "ExtractedRule" for node in graph["nodes"]))
+        event = self.session.get(DecisionEvent, result["prediction_event_id"])
+        self.assertEqual(event.event_context["model_name"], "random_forest")
+        self.assertTrue(all(
+            item.model_name == "random_forest"
+            for item in event.predictions
+        ))
+        record = main.record_ml_decision(
+            main.MLDecisionRequest(
+                prediction_event_id=event.id,
+                chosen_option_id="SUP-A",
+                rationale="Selected Supplier A to meet the budget.",
+                operational_objective="Replenish the stock before the delivery deadline.",
+            ),
+            self.session,
+        )
+        self.assertEqual(record["reasoning_context"]["rationale_source"], "human_stated")
+        self.assertTrue(record["reasoning_snapshot"]["alternatives"])
+        linked_rules = self.session.query(ExtractedRule).filter_by(
+            prediction_event_id=event.id
+        ).all()
+        self.assertTrue(linked_rules)
+        self.assertTrue(all(rule.decision_id == event.decision.id for rule in linked_rules))
+        history_record = main.get_decision_feedback(self.session)["records"][0]
+        self.assertIsNotNone(history_record["model_explanation"])
+        self.assertTrue(history_record["reasoning_snapshot"]["alternatives"])
 
 
 if __name__ == "__main__":

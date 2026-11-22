@@ -94,6 +94,11 @@ class DecisionEvent(Base, TimestampMixin):
     preference: Mapped[Optional["Preference"]] = relationship(back_populates="decision_events")
     predictions: Mapped[list["Prediction"]] = relationship(back_populates="decision_event", cascade="all, delete-orphan")
     decision: Mapped[Optional["Decision"]] = relationship(back_populates="decision_event", cascade="all, delete-orphan", uselist=False)
+    model_explanation: Mapped[Optional["ModelExplanation"]] = relationship(
+        back_populates="decision_event",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
 
 class Prediction(Base, TimestampMixin):
     __tablename__ = "predictions"
@@ -134,6 +139,66 @@ class Outcome(Base, TimestampMixin):
     actual_observed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     observed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     decision: Mapped["Decision"] = relationship(back_populates="outcome")
+
+class ModelExplanation(Base, TimestampMixin):
+    __tablename__ = "model_explanations"
+    __table_args__ = (
+        UniqueConstraint("prediction_event_id", name="uq_model_explanation_prediction_event"),
+        Index("ix_model_explanations_version", "model_version"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    prediction_event_id: Mapped[str] = mapped_column(
+        ForeignKey("decision_events.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    model_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    top_features: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    tree_vote_summary: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    rule_paths: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    recurring_rules: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    decision_event: Mapped["DecisionEvent"] = relationship(back_populates="model_explanation")
+    extracted_rules: Mapped[list["ExtractedRule"]] = relationship(
+        back_populates="model_explanation",
+        cascade="all, delete-orphan",
+    )
+
+class ExtractedRule(Base, TimestampMixin):
+    __tablename__ = "extracted_rules"
+    __table_args__ = (
+        Index("ix_extracted_rules_event", "prediction_event_id"),
+        Index("ix_extracted_rules_scenario", "scenario_id"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    model_explanation_id: Mapped[int] = mapped_column(
+        ForeignKey("model_explanations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    prediction_event_id: Mapped[str] = mapped_column(
+        ForeignKey("decision_events.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    model_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    tree_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    feature_name: Mapped[str] = mapped_column(String(250), nullable=False)
+    condition_operator: Mapped[str] = mapped_column(String(10), nullable=False)
+    threshold: Mapped[float] = mapped_column(Float, nullable=False)
+    branch_taken: Mapped[str] = mapped_column(String(10), nullable=False)
+    predicted_choice_id: Mapped[str] = mapped_column(
+        ForeignKey("alternatives.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    scenario_id: Mapped[str] = mapped_column(
+        ForeignKey("situations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    decision_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("decisions.id", ondelete="SET NULL"),
+    )
+    tree_vote: Mapped[str] = mapped_column(String(30), nullable=False)
+    support_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    support_confidence: Mapped[float] = mapped_column(Float, default=0, nullable=False)
+    model_explanation: Mapped["ModelExplanation"] = relationship(back_populates="extracted_rules")
 
 class ContextNode(Base, TimestampMixin):
     __tablename__ = "context_graph_nodes"

@@ -27,6 +27,7 @@ from app.context_graph import (
 from app.database import SessionLocal, engine, get_db
 from app.init_db import create_tables
 from app.ml.features import FeatureDataError
+from app.ml.model_registry import DEFAULT_MODEL_NAME, ModelName
 from app.ml.predict import (
     DecisionMakerNotFoundError,
     ModelNotTrainedError,
@@ -37,14 +38,18 @@ from app.ml.predict import (
 )
 from app.models import (
     Alternative,
+    Assessment,
     ContextNode,
     ContextRelationship,
     Decision,
     DecisionEvent,
     DecisionMaker,
+    ExtractedRule,
+    ModelExplanation,
     Outcome,
     Prediction,
     Preference,
+    Situation,
 )
 
 CONFIG_PATH = Path(__file__).parent / "config" / "decision_pipeline.json"
@@ -268,12 +273,19 @@ class AssessRequest(BaseModel):
 class MLPredictionRequest(BaseModel):
     scenario_id: str = Field(min_length=1)
     decision_maker_id: str = Field(min_length=1)
+    model_name: ModelName = DEFAULT_MODEL_NAME
 
 
 class MLDecisionRequest(BaseModel):
     prediction_event_id: str = Field(min_length=1, max_length=60)
     chosen_option_id: str = Field(min_length=1, max_length=30)
     rationale: str = Field(min_length=1, max_length=1000)
+    operational_objective: str = Field(min_length=1, max_length=500)
+    constraints: List[str] = Field(default_factory=list, max_length=20)
+    influencing_factors: List[str] = Field(default_factory=list, max_length=20)
+    reasoning_steps: List[str] = Field(default_factory=list, max_length=20)
+    considered_alternative_codes: List[str] = Field(default_factory=list, max_length=20)
+    confidence: float | None = Field(default=None, ge=0, le=1)
 
 
 class TwinUpdateRequest(BaseModel):
@@ -289,6 +301,12 @@ class DecisionFeedbackRequest(BaseModel):
     decision_maker_id: str
     chosen_option_id: str
     rationale: str = Field(default="", max_length=1000)
+    operational_objective: str | None = Field(default=None, max_length=500)
+    constraints: List[str] = Field(default_factory=list, max_length=20)
+    influencing_factors: List[str] = Field(default_factory=list, max_length=20)
+    reasoning_steps: List[str] = Field(default_factory=list, max_length=20)
+    considered_alternative_codes: List[str] = Field(default_factory=list, max_length=20)
+    confidence: float | None = Field(default=None, ge=0, le=1)
 
 
 class OutcomeFeedbackRequest(BaseModel):
@@ -725,7 +743,12 @@ def evaluate_training_data():
 @app.post("/api/ml/predict")
 def predict_ml_choice(request: MLPredictionRequest, db: Session = Depends(get_db)):
     try:
-        prediction = predict_choice(db, request.scenario_id, request.decision_maker_id)
+        prediction = predict_choice(
+            db,
+            request.scenario_id,
+            request.decision_maker_id,
+            model_name=request.model_name,
+        )
     except ModelNotTrainedError as error:
         raise HTTPException(
             status_code=503,
@@ -773,6 +796,7 @@ def persist_ml_prediction(db: Session, prediction: dict) -> dict:
         "model_name": model_name,
         "model_version": model_version,
         "training_data_source": prediction["model"]["training_data_source"],
+        "reasoning_snapshot": prediction["reasoning_snapshot"],
     }
     event = DecisionEvent(
         id=event_id,
@@ -872,6 +896,102 @@ def persist_ml_prediction(db: Session, prediction: dict) -> dict:
                 provenance,
             )
 
+    model_explanation = prediction.get("explanation")
+    if model_explanation:
+        explanation_row = ModelExplanation(
+            prediction_event_id=event_id,
+            model_version=model_version,
+            top_features=model_explanation["top_features"],
+            tree_vote_summary=model_explanation["tree_vote_summary"],
+            rule_paths=model_explanation["rule_paths"],
+            recurring_rules=model_explanation["recurring_rules"],
+            data_source="model",
+        )
+        db.add(explanation_row)
+        db.flush()
+        explanation_key = node_key("ModelExplanation", event_id)
+        predicted_alternative = next(
+            item for item in prediction["probabilities"]
+            if item["alternative_code"] == prediction["predicted_choice"]
+        )
+        predicted_alternative_key = node_key("Alternative", predicted_alternative["alternative_id"])
+        add_node(
+            db,
+            explanation_key,
+            "ModelExplanation",
+            f"Experimental Random Forest patterns for {scenario_id}",
+            {
+                "model_version": model_version,
+                "top_features": model_explanation["top_features"],
+                "tree_vote_summary": model_explanation["tree_vote_summary"],
+                "rule_path_note": model_explanation["rule_path_note"],
+            },
+            provenance,
+        )
+        add_relationship(
+            db,
+            event_key,
+            explanation_key,
+            "HAS_EXPLANATION",
+            provenance=provenance,
+        )
+        for path in model_explanation["rule_paths"]:
+            for condition in path["conditions"]:
+                db.add(ExtractedRule(
+                    id=str(uuid4()),
+                    model_explanation_id=explanation_row.id,
+                    prediction_event_id=event_id,
+                    model_version=model_version,
+                    tree_id=path["tree_id"],
+                    feature_name=condition["feature_name"],
+                    condition_operator=condition["condition_operator"],
+                    threshold=condition["threshold"],
+                    branch_taken=condition["branch_taken"],
+                    predicted_choice_id=predicted_alternative["alternative_id"],
+                    scenario_id=scenario_id,
+                    tree_vote=path["tree_vote"],
+                    support_count=condition["support_count"],
+                    support_confidence=condition["support_confidence"],
+                    data_source="model",
+                ))
+        for index, rule in enumerate(model_explanation["recurring_rules"][:5]):
+            rule_key = node_key("ExtractedRule", f"{event_id}:{index}")
+            factor_key = node_key("DecisionFactor", f"{event_id}:model:{index}")
+            add_node(
+                db,
+                rule_key,
+                "ExtractedRule",
+                f"{rule['feature_name']} {rule['condition_operator']} {rule['threshold']:g}",
+                {
+                    **rule,
+                    "interpretation": "Experimental pattern from historical human choices.",
+                    "model_version": model_version,
+                },
+                provenance,
+            )
+            add_node(
+                db,
+                factor_key,
+                "DecisionFactor",
+                rule["feature_name"],
+                {
+                    "feature_name": rule["feature_name"],
+                    "source": "model_derived",
+                    "model_version": model_version,
+                },
+                provenance,
+            )
+            add_relationship(db, explanation_key, rule_key, "HAS_EXTRACTED_RULE", provenance=provenance)
+            add_relationship(db, rule_key, factor_key, "USES_FEATURE", provenance=provenance)
+            add_relationship(
+                db,
+                rule_key,
+                predicted_alternative_key,
+                "SUPPORTS",
+                {"support_count": rule["support_count"], "support_confidence": rule["support_confidence"]},
+                provenance,
+            )
+
     db.commit()
     return {
         **prediction,
@@ -879,6 +999,119 @@ def persist_ml_prediction(db: Session, prediction: dict) -> dict:
         "prediction_run_id": prediction_run_id,
         "persisted": True,
     }
+
+
+def _add_human_reasoning_graph(
+    db: Session,
+    decision_key: str,
+    decision_id: str,
+    event: DecisionEvent,
+    reasoning: dict,
+    rationale: str,
+) -> None:
+    provenance = "observed_human:dashboard"
+    if reasoning.get("operational_objective"):
+        objective_key = node_key("Objective", decision_id)
+        add_node(
+            db,
+            objective_key,
+            "Objective",
+            reasoning["operational_objective"],
+            {"decision_id": decision_id, "source": "human_stated"},
+            provenance,
+        )
+        add_relationship(db, decision_key, objective_key, "PURSUED", provenance=provenance)
+
+    if rationale:
+        rationale_key = node_key("HumanStatedReason", decision_id)
+        add_node(
+            db,
+            rationale_key,
+            "HumanStatedReason",
+            f"Human rationale for {decision_id}",
+            {
+                "text": rationale,
+                "source": reasoning.get("rationale_source", "human_stated"),
+                "decision_id": decision_id,
+            },
+            provenance,
+        )
+        add_relationship(
+            db,
+            decision_key,
+            rationale_key,
+            "HUMAN_STATED_REASON",
+            provenance=provenance,
+        )
+
+    for index, constraint in enumerate(reasoning["constraints"]):
+        constraint_key = node_key("Constraint", f"{decision_id}:{index}")
+        add_node(
+            db,
+            constraint_key,
+            "Constraint",
+            constraint,
+            {"decision_id": decision_id, "source": "human_stated"},
+            provenance,
+        )
+        add_relationship(db, decision_key, constraint_key, "CONSTRAINED_BY", provenance=provenance)
+
+    for index, factor in enumerate(reasoning["influencing_factors"]):
+        factor_key = node_key("DecisionFactor", f"{decision_id}:human:{index}")
+        add_node(
+            db,
+            factor_key,
+            "DecisionFactor",
+            factor,
+            {"decision_id": decision_id, "source": "human_stated"},
+            provenance,
+        )
+        add_relationship(db, decision_key, factor_key, "INFLUENCED_BY", provenance=provenance)
+
+    for index, step in enumerate(reasoning["reasoning_steps"]):
+        step_key = node_key("ReasoningStep", f"{decision_id}:{index}")
+        add_node(
+            db,
+            step_key,
+            "ReasoningStep",
+            step,
+            {"decision_id": decision_id, "step_index": index + 1, "source": "human_stated"},
+            provenance,
+        )
+        add_relationship(
+            db,
+            decision_key,
+            step_key,
+            "HAS_REASONING_STEP",
+            {"step_index": index + 1},
+            provenance,
+        )
+
+    snapshot_alternatives = {
+        item["code"]: item
+        for item in reasoning["available_alternatives"]
+    }
+    for code in reasoning["considered_alternative_codes"]:
+        alternative = snapshot_alternatives[code]
+        add_relationship(
+            db,
+            decision_key,
+            node_key("Alternative", alternative["id"]),
+            "CONSIDERED",
+            {"alternative_code": code},
+            provenance,
+        )
+
+    preference_key = node_key("Preference", event.decision_maker_id)
+    if db.get(ContextNode, preference_key) is not None:
+        add_relationship(
+            db,
+            decision_key,
+            preference_key,
+            "INFLUENCED_BY",
+            {"weights_at_decision": reasoning["preference_weights"]},
+            provenance,
+        )
 
 
 @app.post("/api/ml/decisions")
@@ -901,6 +1134,68 @@ def record_ml_decision(request: MLDecisionRequest, db: Session = Depends(get_db)
             status_code=422,
             detail="The selected alternative was not included in this prediction.",
         )
+    objective = request.operational_objective.strip()
+    if not objective:
+        raise HTTPException(status_code=422, detail="An operational objective is required.")
+    rationale = request.rationale.strip()
+    if not rationale:
+        raise HTTPException(status_code=422, detail="A human-stated rationale is required.")
+    reasoning_snapshot = (event.event_context or {}).get("reasoning_snapshot", {})
+    available_alternatives = reasoning_snapshot.get("alternatives", [])
+    if not available_alternatives:
+        available_alternatives = [
+            {
+                "id": item.alternative_id,
+                "code": item.alternative.code,
+                "name": item.alternative.name,
+                "available": True,
+                "eligible": True,
+                "exclusion_reason": None,
+                "attributes": item.alternative.attributes,
+                "criterion_scores": {},
+                "overall_suitability": None,
+            }
+            for item in event.predictions
+        ]
+    eligible_codes = {
+        item["code"] for item in available_alternatives
+        if item.get("eligible")
+    }
+    considered_codes = request.considered_alternative_codes or sorted(eligible_codes)
+    if not set(considered_codes).issubset(eligible_codes):
+        raise HTTPException(
+            status_code=422,
+            detail="Considered alternatives must be available and eligible for this decision.",
+        )
+    if request.chosen_option_id not in considered_codes:
+        raise HTTPException(
+            status_code=422,
+            detail="The selected alternative must be included among those considered.",
+        )
+
+    def clean_items(values: List[str], label: str) -> List[str]:
+        cleaned = [value.strip() for value in values]
+        if any(not value or len(value) > 250 for value in cleaned):
+            raise HTTPException(
+                status_code=422,
+                detail=f"{label} entries must contain 1 to 250 non-whitespace characters.",
+            )
+        return cleaned
+
+    human_reasoning = {
+        "operational_objective": objective,
+        "constraints": clean_items(request.constraints, "Constraint"),
+        "influencing_factors": clean_items(request.influencing_factors, "Influencing factor"),
+        "reasoning_steps": clean_items(request.reasoning_steps, "Reasoning step"),
+        "considered_alternative_codes": considered_codes,
+        "available_alternatives": available_alternatives,
+        "situation_at_decision": reasoning_snapshot.get("situation", {}),
+        "preference_weights": reasoning_snapshot.get("preference_weights", {}),
+        "confidence": request.confidence,
+        "rationale_source": "human_stated" if request.rationale else "not_provided",
+        "rationale": rationale,
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+    }
 
     public_id = f"DEC-{uuid4().hex[:12].upper()}"
     event.status = "decided"
@@ -908,17 +1203,21 @@ def record_ml_decision(request: MLDecisionRequest, db: Session = Depends(get_db)
         **(event.event_context or {}),
         "public_decision_id": public_id,
         "recorded_choice_id": chosen_prediction.alternative.code,
+        "human_reasoning": human_reasoning,
     }
     decision = Decision(
         decision_event=event,
         chosen_alternative_id=chosen_prediction.alternative_id,
-        rationale=request.rationale,
+        rationale=rationale,
         label_source="observed_human",
         confidence_note=public_id,
         data_source="observed_human",
     )
     db.add(decision)
     db.flush()
+    if event.model_explanation:
+        for rule in event.model_explanation.extracted_rules:
+            rule.decision_id = decision.id
 
     decision_key = node_key("Decision", public_id)
     event_key = node_key("DecisionEvent", event.id)
@@ -932,7 +1231,9 @@ def record_ml_decision(request: MLDecisionRequest, db: Session = Depends(get_db)
             "scenario_id": event.situation_id,
             "decision_maker_id": event.decision_maker_id,
             "recorded_choice_id": chosen_prediction.alternative.code,
-            "rationale": request.rationale,
+            "rationale": rationale,
+            "rationale_source": "human_stated",
+            "human_reasoning": human_reasoning,
             "label_source": "observed_human",
             "prediction_run_id": (event.event_context or {}).get("prediction_run_id"),
         },
@@ -960,6 +1261,14 @@ def record_ml_decision(request: MLDecisionRequest, db: Session = Depends(get_db)
         "SELECTED",
         {"rationale": request.rationale},
         "observed_human:dashboard",
+    )
+    _add_human_reasoning_graph(
+        db,
+        decision_key,
+        public_id,
+        event,
+        human_reasoning,
+        rationale,
     )
     db.commit()
     return feedback_record(event, decision)
@@ -1111,6 +1420,14 @@ def create_persisted_decision(db: Session, request: DecisionFeedbackRequest) -> 
         (item for item in assessment["stage3"]["decision_maker_probabilities"] if item["decision_maker_id"] == request.decision_maker_id),
         None,
     )
+    preference_profile = next(
+        (
+            item
+            for item in assessment["stage2"]
+            if item["decision_maker_id"] == request.decision_maker_id
+        ),
+        {},
+    )
     if person is None:
         raise HTTPException(status_code=422, detail=f"Unknown decision-maker: {request.decision_maker_id}")
     option = next(
@@ -1123,18 +1440,102 @@ def create_persisted_decision(db: Session, request: DecisionFeedbackRequest) -> 
     scenario_id = assessment["scenario_id"]
     public_id = f"DEC-{uuid4().hex[:12].upper()}"
     event_id = f"{scenario_id}:{request.decision_maker_id}:actual:{uuid4().hex}"
-    latest_event_number = db.scalar(
-        select(func.max(DecisionEvent.event_number)).where(
-            DecisionEvent.situation_id == scenario_id,
-            DecisionEvent.decision_maker_id == request.decision_maker_id,
+    rationale_text = request.rationale.strip()
+    eligible_codes = {item["option_id"] for item in person["probabilities"]}
+    considered_codes = request.considered_alternative_codes or sorted(eligible_codes)
+    if not set(considered_codes).issubset(eligible_codes) or request.chosen_option_id not in considered_codes:
+        raise HTTPException(
+            status_code=422,
+            detail="Considered alternatives must be eligible and include the selected alternative.",
         )
-    ) or 0
+
+    def clean_items(values: List[str], label: str) -> List[str]:
+        cleaned = [value.strip() for value in values]
+        if any(not value or len(value) > 250 for value in cleaned):
+            raise HTTPException(
+                status_code=422,
+                detail=f"{label} entries must contain 1 to 250 non-whitespace characters.",
+            )
+        return cleaned
+
+    scenario = db.get(Situation, scenario_id)
+    scenario_alternatives = db.scalars(
+        select(Alternative)
+        .where(Alternative.situation_id == scenario_id)
+        .order_by(Alternative.code)
+    ).all()
+    scenario_assessments = db.scalars(
+        select(Assessment)
+        .where(Assessment.situation_id == scenario_id)
+        .order_by(Assessment.assessment_version.desc(), Assessment.id.desc())
+    ).all()
+    assessment_by_alternative = {}
+    for item in scenario_assessments:
+        assessment_by_alternative.setdefault(item.alternative_id, item)
+    available_alternatives = [
+        {
+            "id": item.id,
+            "code": item.code,
+            "name": item.name,
+            "available": item.is_available,
+            "eligible": item.code in eligible_codes,
+            "exclusion_reason": None if item.code in eligible_codes else "Excluded by current assessment.",
+            "attributes": item.attributes,
+            "criterion_scores": (
+                assessment_by_alternative[item.id].criterion_scores
+                if item.id in assessment_by_alternative
+                else {}
+            ),
+            "overall_suitability": (
+                assessment_by_alternative[item.id].overall_score
+                if item.id in assessment_by_alternative
+                else None
+            ),
+        }
+        for item in scenario_alternatives
+    ]
     preference = db.scalar(
         select(Preference).where(
             Preference.decision_maker_id == request.decision_maker_id,
             Preference.is_current.is_(True),
         )
     )
+    reasoning_snapshot = {
+        "captured_at": datetime.now(timezone.utc).isoformat(),
+        "situation": {
+            "id": scenario.id if scenario else scenario_id,
+            "title": scenario.title if scenario else "",
+            "description": scenario.description if scenario else "",
+            "context_data": scenario.context_data if scenario else {},
+        },
+        "decision_maker": {
+            "id": request.decision_maker_id,
+            "name": person["decision_maker_name"],
+            "role": person.get("role", preference_profile.get("role", "")),
+        },
+        "preference_weights": preference.weights if preference else {},
+        "alternatives": available_alternatives,
+    }
+    human_reasoning = {
+        "operational_objective": request.operational_objective.strip() if request.operational_objective else None,
+        "constraints": clean_items(request.constraints, "Constraint"),
+        "influencing_factors": clean_items(request.influencing_factors, "Influencing factor"),
+        "reasoning_steps": clean_items(request.reasoning_steps, "Reasoning step"),
+        "considered_alternative_codes": considered_codes,
+        "available_alternatives": available_alternatives,
+        "situation_at_decision": reasoning_snapshot["situation"],
+        "preference_weights": reasoning_snapshot["preference_weights"],
+        "confidence": request.confidence,
+        "rationale_source": "human_stated" if rationale_text else "not_provided",
+        "rationale": rationale_text,
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+    }
+    latest_event_number = db.scalar(
+        select(func.max(DecisionEvent.event_number)).where(
+            DecisionEvent.situation_id == scenario_id,
+            DecisionEvent.decision_maker_id == request.decision_maker_id,
+        )
+    ) or 0
     event = DecisionEvent(
         id=event_id,
         situation_id=scenario_id,
@@ -1148,7 +1549,10 @@ def create_persisted_decision(db: Session, request: DecisionFeedbackRequest) -> 
             "scenario_id": scenario_id,
             "event_number": latest_event_number + 1,
             "twin_revision": assessment["operational_snapshot"]["twin_revision"],
+            "reasoning_snapshot": reasoning_snapshot,
+            "human_reasoning": human_reasoning,
         },
+        data_source="observed_human",
     )
     db.add(event)
     db.flush()
@@ -1233,9 +1637,10 @@ def create_persisted_decision(db: Session, request: DecisionFeedbackRequest) -> 
     decision = Decision(
         decision_event_id=event_id,
         chosen_alternative_id=alternative_id,
-        rationale=request.rationale,
+        rationale=rationale_text,
         label_source="observed_human",
         confidence_note=public_id,
+        data_source="observed_human",
     )
     db.add(decision)
     db.flush()
@@ -1249,7 +1654,9 @@ def create_persisted_decision(db: Session, request: DecisionFeedbackRequest) -> 
             "scenario_id": scenario_id,
             "decision_maker_id": request.decision_maker_id,
             "recorded_choice_id": option["option_id"],
-            "rationale": request.rationale,
+            "rationale": rationale_text,
+            "rationale_source": human_reasoning["rationale_source"],
+            "human_reasoning": human_reasoning,
             "label_source": "observed_human",
         },
         "observed_human:dashboard",
@@ -1262,6 +1669,14 @@ def create_persisted_decision(db: Session, request: DecisionFeedbackRequest) -> 
         "SELECTED",
         {"rationale": request.rationale},
         "observed_human:dashboard",
+    )
+    _add_human_reasoning_graph(
+        db,
+        decision_key,
+        public_id,
+        event,
+        human_reasoning,
+        rationale_text,
     )
     db.commit()
     return feedback_record(event, decision)
@@ -1313,6 +1728,20 @@ def feedback_record(event: DecisionEvent, decision: Decision) -> dict:
         "preference_weights": event.preference.weights if event.preference else {},
         "model_name": predicted.model_name if predicted else None,
         "rationale": decision.rationale or "",
+        "reasoning_context": event_context.get("human_reasoning", {}),
+        "reasoning_snapshot": event_context.get("reasoning_snapshot", {}),
+        "model_explanation": (
+            {
+                "model_version": event.model_explanation.model_version,
+                "top_features": event.model_explanation.top_features,
+                "tree_vote_summary": event.model_explanation.tree_vote_summary,
+                "rule_paths": event.model_explanation.rule_paths,
+                "recurring_rules": event.model_explanation.recurring_rules,
+                "generated_at": event.model_explanation.generated_at.isoformat(),
+            }
+            if event.model_explanation
+            else None
+        ),
         "twin_revision": event_context.get("twin_revision", 0),
         "outcome": {
             "status": outcome.status,

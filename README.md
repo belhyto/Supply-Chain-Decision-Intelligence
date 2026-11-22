@@ -19,7 +19,7 @@ The dataset is synthetic and for workflow/model testing only. Reported top-choic
 - Configuration-driven mock data plus an eight-scenario synthetic training fixture with 24 alternatives, four decision-maker profiles, 32 recorded decisions, and 32 outcomes
 
 ## Important interpretation
-Suitability scores are weighted evaluations of option fit. Stage 3 softmax estimates and multinomial logistic-regression probabilities are illustrative, not calibrated evidence of real human behavior. The current classifier is trained on synthetic decisions; calibrate and validate it against observed historical choices before operational use.
+Suitability scores are weighted evaluations of option fit, separate from a person's actual choice. Logistic regression remains the synthetic-data prototype model. Random Forest is experimental and is trained only from observed human decisions; its feature importance and tree paths are model-derived patterns, never evidence of a particular person's reasoning. Human objectives, constraints, considered alternatives, preferences, stated factors, ordered reasoning steps, confidence, rationale, and later outcomes are preserved separately in the decision context and graph. Neither model is validated for operational use.
 
 ## Configure another domain
 The pipeline reads its domain, situation, criteria, weights, available options, and decision-maker profiles from `backend/app/config/decision_pipeline.json`. Edit that file to create another domain without changing the scoring implementation:

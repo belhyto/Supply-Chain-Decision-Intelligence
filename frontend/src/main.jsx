@@ -302,6 +302,8 @@ function KnowledgeGraphLayer({ scenarioId }) {
 
 const GRAPH_COLORS = {
   Situation: "#f5a623",
+  Objective: "#e5bd52",
+  Constraint: "#e5885c",
   Parameter: "#e5bd52",
   Alternative: "#47b889",
   Criterion: "#a77beb",
@@ -310,6 +312,11 @@ const GRAPH_COLORS = {
   Assessment: "#59b9a2",
   DecisionEvent: "#55a8db",
   Prediction: "#4b91d0",
+  ModelExplanation: "#71a6d9",
+  ExtractedRule: "#bb91e8",
+  DecisionFactor: "#df9a67",
+  ReasoningStep: "#c5a774",
+  HumanStatedReason: "#8fc7a0",
   Decision: "#f08c68",
   Outcome: "#92c76e",
   Context: "#a7adb7"
@@ -609,15 +616,31 @@ function TwinEntityCard({ title, entities, fields, labels }) {
 
 function FeedbackLayer({ data, records, onChanged, scenarioId }) {
   const [decisionMakerId, setDecisionMakerId] = useState(data.decision_makers[0]?.id ?? "");
+  const [modelName, setModelName] = useState("multinomial_logistic_regression");
   const [prediction, setPrediction] = useState(null);
   const [loadingPrediction, setLoadingPrediction] = useState(false);
   const [savingDecision, setSavingDecision] = useState(false);
   const [decisionRecorded, setDecisionRecorded] = useState(false);
   const [chosenOptionId, setChosenOptionId] = useState("");
   const [rationale, setRationale] = useState("");
+  const [operationalObjective, setOperationalObjective] = useState("");
+  const [constraints, setConstraints] = useState("");
+  const [influencingFactors, setInfluencingFactors] = useState("");
+  const [reasoningSteps, setReasoningSteps] = useState("");
+  const [consideredAlternativeIds, setConsideredAlternativeIds] = useState([]);
+  const [confidence, setConfidence] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const decisionMaker = data.decision_makers.find(person => person.id === decisionMakerId);
+
+  useEffect(() => {
+    setOperationalObjective("");
+    setConstraints("");
+    setInfluencingFactors("");
+    setReasoningSteps("");
+    setConsideredAlternativeIds([]);
+    setConfidence("");
+  }, [scenarioId]);
 
   async function loadPrediction() {
     setError("");
@@ -630,11 +653,21 @@ function FeedbackLayer({ data, records, onChanged, scenarioId }) {
       const response = await fetch("/api/ml/predict", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ scenario_id: scenarioId, decision_maker_id: decisionMakerId })
+        body: JSON.stringify({
+          scenario_id: scenarioId,
+          decision_maker_id: decisionMakerId,
+          model_name: modelName
+        })
       });
       const body = await response.json();
       if (!response.ok) throw new Error(body.detail ?? "Model prediction could not be generated.");
       setPrediction(body);
+      setOperationalObjective(current => current || body.reasoning_snapshot?.operational_objective || "");
+      setConsideredAlternativeIds(
+        (body.reasoning_snapshot?.alternatives ?? [])
+          .filter(alternative => alternative.eligible)
+          .map(alternative => alternative.code)
+      );
     } catch (predictionError) {
       setError(predictionError instanceof Error ? predictionError.message : "Model prediction could not be generated.");
     } finally {
@@ -644,7 +677,7 @@ function FeedbackLayer({ data, records, onChanged, scenarioId }) {
 
   useEffect(() => {
     if (decisionMakerId) loadPrediction();
-  }, [scenarioId, decisionMakerId]);
+  }, [scenarioId, decisionMakerId, modelName]);
 
   async function createDecision(event) {
     event.preventDefault();
@@ -658,7 +691,13 @@ function FeedbackLayer({ data, records, onChanged, scenarioId }) {
         body: JSON.stringify({
           prediction_event_id: prediction.prediction_event_id,
           chosen_option_id: chosenOptionId,
-          rationale
+          rationale,
+          operational_objective: operationalObjective,
+          constraints: parseContextList(constraints),
+          influencing_factors: parseContextList(influencingFactors),
+          reasoning_steps: parseContextList(reasoningSteps),
+          considered_alternative_codes: consideredAlternativeIds,
+          confidence: confidence === "" ? null : Number(confidence) / 100
         })
       });
       const body = await response.json();
@@ -692,6 +731,10 @@ function FeedbackLayer({ data, records, onChanged, scenarioId }) {
     <section className="panel">
       <h3>Model prediction</h3>
       <label className="feedback-decision-maker">Decision-maker<select value={decisionMakerId} onChange={event => setDecisionMakerId(event.target.value)}>{data.decision_makers.map(person => <option key={person.id} value={person.id}>{person.name} · {person.role}</option>)}</select></label>
+      <label className="feedback-decision-maker">Prediction model<select value={modelName} onChange={event => setModelName(event.target.value)}>
+        <option value="multinomial_logistic_regression">Multinomial logistic regression</option>
+        <option value="random_forest">Experimental historical pattern analysis · Random Forest</option>
+      </select></label>
       {decisionMaker && <div className="preference-profile">
         <span className="eyebrow">PREFERENCE PROFILE · {decisionMaker.role}</span>
         <div className="preference-list">{Object.entries(decisionMaker.preferences).map(([criterion, weight]) => <span key={criterion}>{criterion}: <b>{(weight * 100).toFixed(0)}%</b></span>)}</div>
@@ -704,11 +747,26 @@ function FeedbackLayer({ data, records, onChanged, scenarioId }) {
         </div>)}
         <p className="hint">{prediction.model.name} · prediction {prediction.prediction_run_id} · {prediction.disclaimer}</p>
       </div>}
+      {prediction?.reasoning_snapshot && <SituationDecisionSnapshot snapshot={prediction.reasoning_snapshot} />}
+      {prediction?.explanation && <ModelPatternPanel
+        explanation={prediction.explanation}
+        alternatives={prediction.reasoning_snapshot?.alternatives ?? []}
+      />}
       <div className="demo-input-card">
-        <div><span className="eyebrow">DEMO INPUT · SCN-001</span><b>Procurement Manager → Supplier A</b><small>Select SCN-001 and Procurement Manager. Rationale: “Supplier A meets the cost requirement while staying within the ₹20 lakh budget.”</small></div>
+        <div><span className="eyebrow">DEMO INPUT · SCN-001</span><b>Procurement Manager → Supplier A</b><small>Objective: replenish 1,200 filters within seven days and the ₹20 lakh budget. Human rationale: “Supplier A meets the cost requirement.”</small></div>
         <button type="button" className="secondary-button" disabled={scenarioId !== "SCN-001" || decisionMakerId !== "DM-01" || decisionRecorded} onClick={() => {
           setChosenOptionId("SUP-A");
           setRationale("Supplier A meets the cost requirement while staying within the ₹20 lakh budget.");
+          setOperationalObjective("Replenish 1,200 filters within seven days while staying within the ₹20 lakh budget.");
+          setConstraints("Replacement supply must arrive within seven days.\nTotal cost must not exceed ₹20 lakh.");
+          setInfluencingFactors("Only five inventory days remain.\nDemand has increased by 30%.\nSupplier A has the lowest cost.");
+          setReasoningSteps("Compare each supplier cost with the available budget.\nCheck that eligible suppliers meet the delivery deadline and quantity.\nSelect Supplier A to meet the cost requirement.");
+          setConfidence("80");
+          setConsideredAlternativeIds(
+            (prediction?.reasoning_snapshot?.alternatives ?? [])
+              .filter(alternative => alternative.eligible)
+              .map(alternative => alternative.code)
+          );
         }}>Fill sample decision</button>
       </div>
       {prediction && decisionRecorded && <button type="button" className="secondary-button new-prediction-button" onClick={loadPrediction}>Generate another prediction</button>}
@@ -718,13 +776,104 @@ function FeedbackLayer({ data, records, onChanged, scenarioId }) {
           {(prediction?.probabilities ?? []).map(option => <option key={option.alternative_id} value={option.alternative_code}>{option.alternative_name}</option>)}
         </select></label>
         <label className="wide-field">Decision rationale<input value={rationale} onChange={event => setRationale(event.target.value)} placeholder="Why was this option selected?" required disabled={decisionRecorded} /></label>
-        <button type="submit" className="primary-button" disabled={!prediction || loadingPrediction || savingDecision || decisionRecorded || !chosenOptionId}>{decisionRecorded ? "Decision recorded" : savingDecision ? "Recording…" : "Record human decision"}</button>
+        <label className="wide-field">Operational objective<textarea value={operationalObjective} onChange={event => setOperationalObjective(event.target.value)} placeholder="What outcome is the operation trying to achieve?" required disabled={decisionRecorded} /></label>
+        <label>Constraints<textarea value={constraints} onChange={event => setConstraints(event.target.value)} placeholder="One constraint per line" disabled={decisionRecorded} /></label>
+        <label>Human-stated influencing factors<textarea value={influencingFactors} onChange={event => setInfluencingFactors(event.target.value)} placeholder="Factors that influenced this choice, one per line" disabled={decisionRecorded} /></label>
+        <label className="wide-field">Human reasoning sequence<textarea value={reasoningSteps} onChange={event => setReasoningSteps(event.target.value)} placeholder="List the decision steps in order, one per line" disabled={decisionRecorded} /></label>
+        <fieldset className="considered-options wide-field" disabled={decisionRecorded || !prediction}>
+          <legend>Alternatives considered</legend>
+          <p className="hint">Eligible alternatives are preselected; uncheck any that the decision-maker did not consider.</p>
+          {(prediction?.reasoning_snapshot?.alternatives ?? []).filter(alternative => alternative.eligible).map(alternative =>
+            <label key={alternative.code}>
+              <input
+                type="checkbox"
+                checked={consideredAlternativeIds.includes(alternative.code)}
+                onChange={event => setConsideredAlternativeIds(current =>
+                  event.target.checked
+                    ? [...new Set([...current, alternative.code])]
+                    : current.filter(code => code !== alternative.code)
+                )}
+              />
+              {alternative.name}
+            </label>
+          )}
+        </fieldset>
+        <label>Decision confidence (optional, 0-100%)<input type="number" min="0" max="100" value={confidence} onChange={event => setConfidence(event.target.value)} placeholder="e.g. 80" disabled={decisionRecorded} /></label>
+        <button type="submit" className="primary-button" disabled={!prediction || loadingPrediction || savingDecision || decisionRecorded || !chosenOptionId || !operationalObjective.trim() || !consideredAlternativeIds.includes(chosenOptionId)}>{decisionRecorded ? "Decision recorded" : savingDecision ? "Recording…" : "Record human decision context"}</button>
       </form>
       {message && <p className="success-message">{message}</p>}
       {error && <p className="inline-error">{error}</p>}
     </section>
     <section className="panel"><h3>Recorded decisions & observed outcomes</h3>{records.filter(record => record.scenario_id === scenarioId).length === 0 ? <p className="hint">No human decisions have been recorded for this scenario yet.</p> : records.filter(record => record.scenario_id === scenarioId).map(record => <DecisionRecord key={record.id} record={record} onChanged={onChanged} />)}</section>
   </>;
+}
+
+function parseContextList(value) {
+  return value.split(/\r?\n/).map(item => item.trim()).filter(Boolean);
+}
+
+function SituationDecisionSnapshot({ snapshot }) {
+  const situation = snapshot.situation ?? {};
+  return <section className="decision-snapshot">
+    <h4>Situation & alternatives at decision time</h4>
+    <p>{situation.title} · {situation.description}</p>
+    <div className="snapshot-alternatives">{(snapshot.alternatives ?? []).map(alternative =>
+      <article key={alternative.id}>
+        <b>{alternative.name}</b>
+        <span className={alternative.eligible ? "option-available" : "option-unavailable"}>
+          {alternative.eligible ? "Eligible" : alternative.exclusion_reason ?? "Not eligible"}
+        </span>
+        {alternative.overall_suitability !== null && <small>Suitability {Number(alternative.overall_suitability).toFixed(1)} / 100</small>}
+        <small>{Object.entries(alternative.criterion_scores ?? {}).map(([criterion, score]) => `${criterion}: ${score}`).join(" · ")}</small>
+      </article>
+    )}</div>
+  </section>;
+}
+
+function ModelPatternPanel({ explanation, alternatives = [] }) {
+  const namesByCode = Object.fromEntries(alternatives.map(alternative => [alternative.code, alternative.name]));
+  return <section className="model-pattern-panel">
+    <div className="chart-heading">
+      <div><h4>Experimental Random Forest patterns</h4><p className="hint">Patterns learned from historical human choices; these do not explain this decision-maker's thoughts.</p></div>
+      <span className="chart-period">MODEL-DERIVED</span>
+    </div>
+    <div className="pattern-votes">
+      {Object.entries(explanation.tree_vote_summary ?? {}).map(([code, vote]) =>
+        <span key={code}>{namesByCode[code] ?? code}: <b>{vote.votes} trees ({(vote.share * 100).toFixed(1)}%)</b></span>
+      )}
+    </div>
+    {explanation.top_features?.length > 0 && <div className="pattern-subsection">
+      <b>Global feature importance</b>
+      {explanation.top_features.slice(0, 5).map(feature =>
+        <div className="pattern-row" key={feature.feature_name}>
+          <span>{feature.feature_name.replace(/^(numeric|categorical)__/, "")}</span>
+          <b>{(feature.importance * 100).toFixed(1)}%</b>
+        </div>
+      )}
+    </div>}
+    {explanation.recurring_rules?.length > 0 && <div className="pattern-subsection">
+      <b>Recurring conditions for {namesByCode[explanation.predicted_choice] ?? explanation.predicted_choice}</b>
+      {explanation.recurring_rules.slice(0, 5).map((rule, index) =>
+        <div className="pattern-row" key={`${rule.feature_name}-${index}`}>
+          <span>{rule.feature_name.replace(/^(numeric|categorical)__/, "")} {rule.condition_operator} {Number(rule.threshold).toFixed(2)} · branch {rule.branch_taken}</span>
+          <b>{rule.support_count} trees</b>
+        </div>
+      )}
+    </div>}
+    {explanation.rule_paths?.length > 0 && <details className="pattern-paths">
+      <summary>Inspect {explanation.rule_paths.length} sample tree paths</summary>
+      {explanation.rule_paths.slice(0, 3).map(path =>
+        <div key={path.tree_id}>
+          <b>Tree {path.tree_id} voted {namesByCode[path.tree_vote] ?? path.tree_vote}</b>
+          <ol>{path.conditions.map((condition, index) =>
+            <li key={`${condition.feature_name}-${index}`}>
+              {condition.feature_name.replace(/^(numeric|categorical)__/, "")} {condition.condition_operator} {Number(condition.threshold).toFixed(2)} ({condition.branch_taken})
+            </li>
+          )}</ol>
+        </div>
+      )}
+    </details>}
+  </section>;
 }
 
 function PredictionDashboard({ prediction, records }) {
@@ -879,6 +1028,7 @@ function DecisionRecord({ record, onChanged }) {
   const [status, setStatus] = useState("fulfilled");
   const [notes, setNotes] = useState("");
   const [error, setError] = useState("");
+  const reasoning = record.reasoning_context ?? {};
 
   async function recordOutcome(event) {
     event.preventDefault();
@@ -903,7 +1053,24 @@ function DecisionRecord({ record, onChanged }) {
       <div className="historical-probabilities">{record.probabilities.map(option => <span key={option.option_id}>{option.option_name}: <b>{option.probability_percent.toFixed(1)}%</b></span>)}</div>
       <div className="preference-list"><span className="eyebrow">PREFERENCE WEIGHTS</span>{Object.entries(record.preference_weights ?? {}).map(([criterion, weight]) => <span key={criterion}>{criterion}: <b>{(weight * 100).toFixed(0)}%</b></span>)}</div>
     </div>}
-    {record.rationale && <p className="record-notes">{record.rationale}</p>}
+    {reasoning.operational_objective && <section className="human-reasoning">
+      <h5>Human-stated decision context</h5>
+      <p><b>Objective:</b> {reasoning.operational_objective}</p>
+      {reasoning.constraints?.length > 0 && <p><b>Constraints:</b> {reasoning.constraints.join(" · ")}</p>}
+      {reasoning.influencing_factors?.length > 0 && <p><b>Factors stated:</b> {reasoning.influencing_factors.join(" · ")}</p>}
+      {reasoning.considered_alternative_codes?.length > 0 && <p><b>Alternatives considered:</b> {reasoning.considered_alternative_codes.join(", ")}</p>}
+      {reasoning.confidence !== null && reasoning.confidence !== undefined && <p><b>Decision confidence:</b> {(reasoning.confidence * 100).toFixed(0)}%</p>}
+      {reasoning.reasoning_steps?.length > 0 && <ol>{reasoning.reasoning_steps.map((step, index) => <li key={`${index}-${step}`}>{step}</li>)}</ol>}
+    </section>}
+    {record.rationale && <p className="record-notes"><b>Human-stated rationale:</b> {record.rationale}</p>}
+    {record.reasoning_snapshot && <details className="record-context-snapshot">
+      <summary>Inspect the recorded situation and alternatives</summary>
+      <SituationDecisionSnapshot snapshot={record.reasoning_snapshot} />
+    </details>}
+    {record.model_explanation && <ModelPatternPanel
+      explanation={record.model_explanation}
+      alternatives={record.reasoning_snapshot?.alternatives ?? []}
+    />}
     {record.outcome ? <div className="callout"><b>Outcome: {record.outcome.status}</b>{record.outcome.notes && <><br/><small>{record.outcome.notes}</small></>}</div> : <form className="outcome-form" onSubmit={recordOutcome}><label>Observed result<select value={status} onChange={event => setStatus(event.target.value)}><option value="fulfilled">Fulfilled</option><option value="delayed">Delayed</option><option value="partial">Partial</option><option value="failed">Failed</option></select></label><label>Outcome notes<input value={notes} onChange={event => setNotes(event.target.value)} placeholder="Delivery time, quantity, or cost observed" /></label><button type="button" className="secondary-button outcome-demo-button" onClick={() => { setStatus("fulfilled"); setNotes("1,200 units arrived before the 7-day deadline; no stockout occurred."); }}>Fill sample outcome</button><button type="submit" className="secondary-button">Save outcome</button></form>}
     {error && <p className="inline-error">{error}</p>}
   </article>;

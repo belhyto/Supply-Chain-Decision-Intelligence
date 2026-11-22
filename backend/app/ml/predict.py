@@ -4,15 +4,23 @@ from functools import lru_cache
 import math
 from pathlib import Path
 from typing import Any
+from datetime import datetime, timezone
 
 import joblib
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.ml.features import FeatureDataError, extract_feature_row, feature_matrix
+from app.ml.explain import explain_random_forest
+from app.ml.model_registry import (
+    DEFAULT_MODEL_NAME,
+    MODEL_ARTIFACT_PATHS,
+    ModelName,
+)
 from app.models import Alternative, Assessment, DecisionMaker, Preference, Situation
 
-MODEL_PATH = Path(__file__).parent / "artifacts" / "choice_model.joblib"
+MODEL_PATH = MODEL_ARTIFACT_PATHS[DEFAULT_MODEL_NAME]
+MODEL_PATHS = MODEL_ARTIFACT_PATHS
 
 
 class ModelNotTrainedError(FileNotFoundError):
@@ -60,10 +68,20 @@ def predict_choice(
     scenario_id: str,
     decision_maker_id: str,
     model_path: Path | str | None = None,
+    model_name: ModelName = DEFAULT_MODEL_NAME,
 ) -> dict[str, Any]:
-    artifact = load_model(model_path or MODEL_PATH)
+    if model_name not in MODEL_PATHS:
+        raise ValueError(f"Unsupported model: {model_name}")
+    artifact_path = model_path or (
+        MODEL_PATH if model_name == DEFAULT_MODEL_NAME else MODEL_PATHS[model_name]
+    )
+    artifact = load_model(artifact_path)
     metadata = artifact["metadata"]
     pipeline = artifact["pipeline"]
+    if model_name == "random_forest" and metadata.get("training_data_source") != "observed_human":
+        raise ModelNotTrainedError(
+            "The experimental Random Forest must be retrained using observed human decisions."
+        )
 
     situation = session.get(Situation, scenario_id)
     if situation is None:
@@ -100,8 +118,10 @@ def predict_choice(
         .order_by(Assessment.assessment_version.desc(), Assessment.id.desc())
     ).all()
     scores_by_alternative: dict[str, dict[str, float]] = {}
+    assessment_by_alternative: dict[str, Assessment] = {}
     for assessment in assessments:
         scores_by_alternative.setdefault(assessment.alternative_id, assessment.criterion_scores)
+        assessment_by_alternative.setdefault(assessment.alternative_id, assessment)
 
     criteria = metadata["criteria"]
     alternative_codes = metadata["alternative_codes"]
@@ -141,8 +161,10 @@ def predict_choice(
 
     required_units = situation.context_data.get("required_units")
     eligible_alternatives = []
+    exclusion_reasons: dict[str, str] = {}
     for alternative in alternatives:
         if not alternative.is_available:
+            exclusion_reasons[alternative.id] = "Alternative is unavailable."
             continue
         capacity = alternative.attributes.get("capacity_units")
         if required_units is not None:
@@ -162,6 +184,9 @@ def predict_choice(
                     f"Alternative {alternative.id} has non-finite capacity or required quantity."
                 )
             if capacity_value < required_value:
+                exclusion_reasons[alternative.id] = (
+                    f"Capacity ({capacity_value:g}) is below required quantity ({required_value:g})."
+                )
                 continue
         eligible_alternatives.append(alternative)
     if not eligible_alternatives:
@@ -191,6 +216,48 @@ def predict_choice(
         for alternative in eligible_alternatives
     ]
     probabilities.sort(key=lambda item: item["probability"], reverse=True)
+    alternatives_snapshot = [
+        {
+            "id": alternative.id,
+            "code": alternative.code,
+            "name": alternative.name,
+            "available": alternative.is_available,
+            "eligible": alternative in eligible_alternatives,
+            "exclusion_reason": exclusion_reasons.get(alternative.id),
+            "attributes": alternative.attributes,
+            "criterion_scores": scores_by_alternative[alternative.id],
+            "overall_suitability": (
+                assessment_by_alternative[alternative.id].overall_score
+                if alternative.id in assessment_by_alternative
+                else None
+            ),
+        }
+        for alternative in alternatives
+    ]
+    reasoning_snapshot = {
+        "captured_at": datetime.now(timezone.utc).isoformat(),
+        "situation": {
+            "id": situation.id,
+            "title": situation.title,
+            "description": situation.description,
+            "context_data": situation.context_data,
+        },
+        "decision_maker": {
+            "id": decision_maker.id,
+            "name": decision_maker.name,
+            "role": decision_maker.role,
+        },
+        "operational_objective": situation.context_data.get("operational_objective"),
+        "preference_weights": preference.weights,
+        "alternatives": alternatives_snapshot,
+    }
+    explanation = None
+    if model_name == "random_forest":
+        explanation = explain_random_forest(
+            pipeline,
+            matrix,
+            probabilities[0]["alternative_code"],
+        )
 
     return {
         "scenario_id": situation.id,
@@ -202,6 +269,8 @@ def predict_choice(
         },
         "predicted_choice": probabilities[0]["alternative_code"],
         "probabilities": probabilities,
+        "reasoning_snapshot": reasoning_snapshot,
+        "explanation": explanation,
         "feature_inputs": {
             "preference_weights": preference.weights,
             "alternative_criterion_scores": {
