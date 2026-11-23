@@ -137,7 +137,7 @@ function App() {
           </section>
 
           <nav className="stage-nav layer-nav">
-            {[["1", "Physical supply chain"], ["2", "Digital twin"], ["3", "Decision pipeline"], ["4", "Decision feedback"], ["5", "Knowledge graph"]].map(([num, label]) =>
+            {[["1", "Physical supply chain"], ["2", "Digital twin"], ["3", "Decision pipeline"], ["4", "Decision feedback"], ["5", "Knowledge graph"], ["6", "Decision trace & memory"]].map(([num, label]) =>
               <button key={num} className={activeLayer === Number(num) ? "active" : ""} onClick={() => setActiveLayer(Number(num))}>
                 <b>{num}</b><span>{label}</span>
               </button>
@@ -160,6 +160,12 @@ function App() {
           </>}
           {activeLayer === 4 && <FeedbackLayer data={data} records={feedback} onChanged={refreshFeedback} scenarioId={selectedScenario} />}
           {activeLayer === 5 && <KnowledgeGraphLayer scenarioId={selectedScenario} />}
+          {activeLayer === 6 && <DecisionMemoryLayer
+            scenarioId={selectedScenario}
+            decisionMakers={data.decision_makers}
+            records={feedback}
+            onChanged={async () => { await refreshFeedback(); }}
+          />}
           <footer>
             <span>DIGITAL TWIN / MOCK OPERATIONAL DATA</span>
             <span>Illustrative decision support · Human decision remains final</span>
@@ -300,6 +306,241 @@ function KnowledgeGraphLayer({ scenarioId }) {
   </>;
 }
 
+function DecisionMemoryLayer({ scenarioId, decisionMakers, records }) {
+  const [candidates, setCandidates] = useState([]);
+  const [approved, setApproved] = useState([]);
+  const [selected, setSelected] = useState(null);
+  const [reviewerId, setReviewerId] = useState(
+    decisionMakers.find(person => person.role?.toLowerCase().includes("risk"))?.id
+      ?? decisionMakers[0]?.id
+      ?? ""
+  );
+  const [decisionMakerId, setDecisionMakerId] = useState(decisionMakers[0]?.id ?? "");
+  const [relevant, setRelevant] = useState([]);
+  const [history, setHistory] = useState([]);
+  const [comments, setComments] = useState("");
+  const [notice, setNotice] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function api(path, options = {}) {
+    const response = await fetch(path, options);
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.detail ?? "Decision memory request failed.");
+    return body;
+  }
+
+  async function refresh() {
+    const [candidateData, approvedData] = await Promise.all([
+      api("/api/rules/candidates"),
+      api("/api/rules/approved")
+    ]);
+    setCandidates(candidateData.rules);
+    setApproved(approvedData.rules);
+    if (selected) {
+      const current = candidateData.rules.find(rule => rule.id === selected.id)
+        ?? approvedData.rules.find(rule => rule.id === selected.id);
+      if (current) setSelected(await api(`/api/rules/${current.id}`));
+    }
+  }
+
+  useEffect(() => {
+    refresh().catch(loadError => setError(loadError.message));
+  }, []);
+
+  async function runExtraction() {
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const result = await api("/api/rules/extract", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ min_matching_decisions: 3, min_scenarios: 2, min_decision_makers: 2 })
+      });
+      setNotice(`Completed ${result.model_name} ${result.model_version}: ${result.candidate_count} candidate rules from dataset ${result.dataset_version}.`);
+      await refresh();
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function selectRule(rule) {
+    setError("");
+    setHistory([]);
+    try {
+      setSelected(await api(`/api/rules/${rule.id}`));
+    } catch (requestError) {
+      setError(requestError.message);
+    }
+  }
+
+  async function submitReview(decision, stage) {
+    if (!selected || !reviewerId) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const result = await api(`/api/rules/${selected.id}/review`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          reviewer_id: reviewerId,
+          review_stage: stage,
+          review_decision: decision,
+          comments
+        })
+      });
+      setSelected(await api(`/api/rules/${selected.id}`));
+      setNotice(`Recorded ${stage} review: ${result.review.review_decision}.`);
+      setComments("");
+      await refresh();
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function publishSelected() {
+    if (!selected) return;
+    setBusy(true);
+    setError("");
+    try {
+      const result = await api(`/api/rules/${selected.id}/publish`, { method: "POST" });
+      setNotice(`Published verified rule ${result.rule.rule_name} v${result.rule.version} to graph memory.`);
+      await refresh();
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function loadRelevant() {
+    setError("");
+    try {
+      const result = await api(`/api/rules/relevant/${encodeURIComponent(scenarioId)}?decision_maker_id=${encodeURIComponent(decisionMakerId)}`);
+      setRelevant(result.rules);
+    } catch (requestError) {
+      setError(requestError.message);
+    }
+  }
+
+  async function recordRelevance(ruleId, relevanceStatus) {
+    setError("");
+    try {
+      await api(`/api/rules/${ruleId}/feedback`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          scenario_id: scenarioId,
+          relevance_status: relevanceStatus,
+          considered_by_human: relevanceStatus !== "not_reviewed",
+          feedback: "Human relevance assessment from the decision-memory explorer."
+        })
+      });
+      setNotice(`Recorded this rule as ${relevanceStatus.replace("_", " ")} for ${scenarioId}.`);
+    } catch (requestError) {
+      setError(requestError.message);
+    }
+  }
+
+  async function loadHistory(ruleId) {
+    try {
+      const result = await api(`/api/rules/${ruleId}/history`);
+      setHistory(result.versions);
+    } catch (requestError) {
+      setError(requestError.message);
+    }
+  }
+
+  const selectedIsCandidate = candidates.some(rule => rule.id === selected?.id);
+  const isEvidenceReview = ["PENDING_REVIEW", "CHANGES_REQUESTED"].includes(selected?.status);
+  const isPublicationReview = selected?.status === "APPROVED_FOR_PUBLICATION";
+  return <>
+    <section className="section-heading">
+      <div><div className="eyebrow">DECISION TRACEABILITY & MEMORY</div><h2>Human-verified historical patterns</h2></div>
+      <div className="badge">RANDOM FOREST · OBSERVED DECISIONS ONLY</div>
+    </section>
+    <p className="intro">The existing Random Forest extracts candidate patterns from observed human choices. A human must review evidence and approve publication; approved rules are contextual memory, never autonomous recommendations. Synthetic training examples are excluded from rule extraction.</p>
+    {error && <div className="error">{error}</div>}
+    {notice && <p className="success-message">{notice}</p>}
+    <section className="panel rule-extraction-toolbar">
+      <div><h3>Historical decision analysis</h3><p className="hint">Extraction is unavailable until the database contains enough observed decisions across scenarios and decision-makers.</p></div>
+      <button type="button" className="primary-button" disabled={busy} onClick={runExtraction}>{busy ? "Analyzing…" : "Extract candidate patterns"}</button>
+    </section>
+    <div className="two-col rule-memory-columns">
+      <section className="panel">
+        <h3>Candidate rules</h3>
+        {candidates.length === 0 && <p className="hint">No pending candidates. Run extraction after recording observed decisions.</p>}
+        <div className="rule-list">{candidates.map(rule =>
+          <button key={rule.id} className={`rule-list-item ${selected?.id === rule.id ? "selected" : ""}`} onClick={() => selectRule(rule)}>
+            <span className="eyebrow">{rule.status} · v{rule.version}</span><b>{rule.rule_name}</b>
+            <small>{rule.observed_pattern?.matching_decisions ?? 0} matching · {rule.observed_pattern?.supporting_decisions ?? 0} supporting</small>
+            <small>{rule.extraction?.model_name} · {rule.extraction?.model_version}</small>
+          </button>
+        )}</div>
+      </section>
+      <section className="panel rule-review-panel">
+        <h3>{selected ? selected.rule_name : "Select a candidate or published rule"}</h3>
+        {selected ? <>
+          <p className="hint">{selected.description}</p>
+          <div className="rule-metrics">{Object.entries(selected.observed_pattern ?? {}).filter(([, value]) => typeof value !== "object").map(([key, value]) =>
+            <span key={key}>{key.replaceAll("_", " ")} <b>{typeof value === "number" && key.includes("proportion") ? `${(value * 100).toFixed(1)}%` : value}</b></span>
+          )}</div>
+          <div className="rule-condition-list"><b>Extracted conditions</b>{selected.conditions.map((condition, index) =>
+            <span key={`${condition.feature_name}-${index}`}>{condition.feature_name.replaceAll("_", " ")} {condition.kind === "categorical" ? (condition.condition_operator === ">" ? "is" : "is not") + ` ${condition.category}` : `${condition.condition_operator} ${Number(condition.threshold).toFixed(2)}`}</span>
+          )}</div>
+          <div className="rule-provenance"><b>Model provenance</b><span>{selected.extraction.model_name} · {selected.extraction.model_version}</span><span>Dataset {selected.extraction.dataset_version}</span><span>{selected.extraction.method}</span></div>
+          <label className="rule-reviewer">Reviewer profile<select value={reviewerId} onChange={event => setReviewerId(event.target.value)}>{decisionMakers.map(person => <option key={person.id} value={person.id}>{person.name} · {person.role}</option>)}</select></label>
+          <label className="rule-reviewer">Review comments<textarea value={comments} onChange={event => setComments(event.target.value)} placeholder="Record evidence interpretation, limitations, or exceptions." /></label>
+          {selectedIsCandidate && isEvidenceReview && <div className="rule-actions">
+            <button type="button" className="secondary-button" disabled={busy} onClick={() => submitReview("approved", "evidence")}>Approve evidence</button>
+            <button type="button" className="secondary-button" disabled={busy} onClick={() => submitReview("changes_requested", "evidence")}>Request changes</button>
+            <button type="button" className="secondary-button" disabled={busy} onClick={() => submitReview("rejected", "evidence")}>Reject</button>
+          </div>}
+          {selectedIsCandidate && isPublicationReview && <div className="rule-actions">
+            <button type="button" className="primary-button" disabled={busy} onClick={() => submitReview("approved", "publication")}>Approve publication</button>
+            <button type="button" className="secondary-button" disabled={busy} onClick={() => submitReview("rejected", "publication")}>Reject publication</button>
+          </div>}
+          {selected.status === "APPROVED" && !selected.published_at && <button type="button" className="primary-button" disabled={busy} onClick={publishSelected}>Publish approved rule to graph</button>}
+          <div className="rule-evidence-list"><b>Historical evidence · {selected.evidence?.length ?? 0}</b>{selected.evidence?.slice(0, 12).map(evidence =>
+            <article key={evidence.id} className={evidence.evidence_type === "supporting" ? "supporting" : "contradicting"}>
+              <span>{evidence.evidence_type.toUpperCase()}</span><b>{evidence.decision_maker_name} · {evidence.scenario_id} · {evidence.choice}</b>
+              <small>{evidence.description}</small><small>Human rationale: {evidence.rationale || "not recorded"}</small>
+            </article>
+          )}</div>
+          <button type="button" className="secondary-button" onClick={() => loadHistory(selected.id)}>View version and review history</button>
+          {history.length > 0 && <div className="rule-history">{history.map(version => <span key={version.id}>{version.rule_name} · v{version.version} · {version.status} · {version.extraction.model_version}</span>)}</div>}
+        </> : <p className="hint">Choose a rule to inspect its evidence, reviews, and model provenance.</p>}
+      </section>
+    </div>
+    <section className="panel rule-retrieval-panel">
+      <div className="chart-heading"><div><h3>Approved memory for the current situation</h3><p className="hint">Rules are retrieved by explicit condition matching using the current situation, selected decision-maker, preferences, and alternatives.</p></div><span className="chart-period">HUMAN REVIEW REQUIRED</span></div>
+      <div className="rule-retrieval-controls">
+        <label>Decision-maker<select value={decisionMakerId} onChange={event => setDecisionMakerId(event.target.value)}>{decisionMakers.map(person => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label>
+        <button type="button" className="secondary-button" onClick={loadRelevant}>Find relevant memory</button>
+      </div>
+      {relevant.length === 0 && <p className="hint">{approved.length} rule versions are published; no matching memory has been loaded for this decision-maker.</p>}
+      <div className="cards">{relevant.map(rule =>
+        <article className="data-card approved-rule-card" key={rule.id}>
+          <span className="eyebrow">VERIFIED · VERSION {rule.version} · {rule.extraction.model_version}</span>
+          <h4>{rule.rule_name}</h4><p>{rule.description}</p>
+          <small>{rule.supporting_decisions} supporting · {rule.contradictory_decisions} contradictory</small>
+          <div className="rule-condition-list">{rule.matching_conditions.map((condition, index) =>
+            <span key={`${condition.feature_name}-${index}`}>{condition.feature_name} {condition.condition_operator} {condition.kind === "categorical" ? condition.category : condition.threshold}</span>
+          )}</div>
+          <div className="rule-actions"><button type="button" className="secondary-button" onClick={() => recordRelevance(rule.id, "relevant")}>Relevant</button><button type="button" className="secondary-button" onClick={() => recordRelevance(rule.id, "not_relevant")}>Not relevant</button></div>
+        </article>
+      )}</div>
+    </section>
+    <section className="panel"><h3>Historical decision trace</h3><p className="hint">Each decision card opens its immutable situation and alternative snapshot, human-stated reasoning, independent model explanation, outcome, and reconstructed graph.</p>{records.filter(record => record.scenario_id === scenarioId).length === 0 ? <p className="hint">No decisions are recorded for {scenarioId} yet.</p> : records.filter(record => record.scenario_id === scenarioId).map(record => <DecisionRecord key={record.id} record={record} onChanged={async () => {}} />)}</section>
+  </>;
+}
+
 const GRAPH_COLORS = {
   Situation: "#f5a623",
   Objective: "#e5bd52",
@@ -319,7 +560,12 @@ const GRAPH_COLORS = {
   HumanStatedReason: "#8fc7a0",
   Decision: "#f08c68",
   Outcome: "#92c76e",
-  Context: "#a7adb7"
+  Context: "#a7adb7",
+  DecisionRule: "#bb91e8",
+  RuleExtraction: "#7589cc",
+  RuleReview: "#e5bd52",
+  RuleApplication: "#55a8db",
+  RuleFeedback: "#92c76e"
 };
 
 function GraphNetwork({ graph, focusedNode, onSelect, nodeTypeFilter, nodeSearch }) {
@@ -1024,10 +1270,113 @@ function ProbabilityTrendChart({ points }) {
   </div>;
 }
 
+function DecisionTraceExplorer({ decisionId }) {
+  const [trace, setTrace] = useState(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    fetch(`/api/decisions/${encodeURIComponent(decisionId)}`)
+      .then(async response => {
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.detail ?? "Decision trace could not be loaded.");
+        if (active) setTrace(body);
+      })
+      .catch(loadError => { if (active) setError(loadError.message); });
+    return () => { active = false; };
+  }, [decisionId]);
+
+  if (error) return <p className="inline-error">{error}</p>;
+  if (!trace) return <p className="hint">Loading complete decision trace…</p>;
+
+  const snapshot = trace.situation_snapshot ?? {};
+  const model = trace.model_explanation;
+  return <section className="decision-trace-explorer">
+    <div className="trace-timeline">
+      <article><span>01 · SITUATION</span><b>{snapshot.title ?? trace.scenario_id}</b></article>
+      <article><span>02 · AVAILABLE OPTIONS</span><b>{trace.alternative_snapshot?.length ?? 0} snapshot records</b></article>
+      <article><span>03 · HUMAN DECISION</span><b>{trace.recorded_choice.alternative_name}</b></article>
+      <article><span>04 · OUTCOME</span><b>{trace.outcome?.status ?? "Awaiting observation"}</b></article>
+    </div>
+    <div className="trace-columns">
+      <section className="trace-evidence human">
+        <span className="eyebrow">HUMAN-PROVIDED RECORD</span>
+        <h4>Decision context</h4>
+        <p><b>Objective:</b> {trace.operational_objective ?? "Not recorded"}</p>
+        <p><b>Rationale:</b> {trace.human_rationale.text || "Not recorded"}</p>
+        <p><b>Recorded choice:</b> {trace.recorded_choice.alternative_name} ({trace.recorded_choice.alternative_code})</p>
+        <p><b>Confidence:</b> {trace.confidence === null || trace.confidence === undefined ? "Not recorded" : `${(trace.confidence * 100).toFixed(0)}%`}</p>
+        {trace.constraints.length > 0 && <p><b>Constraints:</b> {trace.constraints.join(" · ")}</p>}
+        {trace.considered_alternatives.length > 0 && <p><b>Alternatives considered:</b> {trace.considered_alternatives.join(", ")}</p>}
+        {trace.influencing_factors.length > 0 && <p><b>Factors stated:</b> {trace.influencing_factors.join(" · ")}</p>}
+        {trace.reasoning_steps.length > 0 && <ol>{trace.reasoning_steps.map((step, index) => <li key={`${index}-${step}`}>{step}</li>)}</ol>}
+        <h5>Preference snapshot</h5>
+        {Object.entries(trace.preference_snapshot ?? {}).map(([criterion, weight]) =>
+          <span className="trace-chip" key={criterion}>{criterion}: {(Number(weight) * 100).toFixed(0)}%</span>
+        )}
+      </section>
+      <section className="trace-evidence machine">
+        <span className="eyebrow">MACHINE-GENERATED ANALYSIS</span>
+        <h4>Prediction and model explanation</h4>
+        {trace.predictions.length > 0
+          ? trace.predictions.map(prediction => <p key={`${prediction.alternative_id}-${prediction.model_version}`}>
+            {prediction.alternative_name}: <b>{(prediction.probability * 100).toFixed(1)}%</b>
+            <small> · {prediction.model_name} · {prediction.model_version}</small>
+          </p>)
+          : <p>No prediction was generated for this decision.</p>}
+        {model ? <>
+          <p><b>Explanation version:</b> {model.model_version} · {model.source}</p>
+          <div className="trace-feature-list">{model.top_features?.slice(0, 5).map(feature =>
+            <span key={feature.feature_name}>{feature.feature_name}: {(feature.importance * 100).toFixed(1)}%</span>
+          )}</div>
+          {model.extracted_rules?.length > 0 && <div>
+            <h5>Extracted model paths</h5>
+            {model.extracted_rules.slice(0, 6).map(rule =>
+              <p className="trace-rule" key={rule.id}>
+                Tree {rule.tree_id}: {rule.feature_name} {rule.condition_operator} {Number(rule.threshold).toFixed(2)}
+                <small> · vote {rule.tree_vote} · supporting trees {rule.support_count} · {rule.model_version}</small>
+              </p>
+            )}
+          </div>}
+          <p className="hint">These patterns describe model behavior; they are not the decision-maker’s stated reasoning.</p>
+        </> : <p className="hint">No separate model explanation is associated with this decision.</p>}
+      </section>
+    </div>
+    <section className="trace-snapshot">
+      <h4>Immutable situation and alternative snapshot</h4>
+      <p>{snapshot.description}</p>
+      <div className="snapshot-alternatives">{trace.alternative_snapshot.map(alternative =>
+        <article key={alternative.id}>
+          <b>{alternative.name}</b>
+          <span className={alternative.eligible ? "option-available" : "option-unavailable"}>
+            {alternative.eligible ? "Eligible at decision time" : alternative.exclusion_reason ?? "Not eligible"}
+          </span>
+          {alternative.overall_suitability !== null && <small>Suitability {Number(alternative.overall_suitability).toFixed(1)} / 100</small>}
+          <small>{Object.entries(alternative.criterion_scores ?? {}).map(([key, score]) => `${key}: ${score}`).join(" · ")}</small>
+        </article>
+      )}</div>
+    </section>
+    <section className="trace-graph">
+      <h4>Reconstructed context graph · bidirectional traversal</h4>
+      <div>{trace.context_graph.relationships.map(edge =>
+        <article key={edge.id}>
+          <span>{trace.context_graph.nodes.find(node => node.id === edge.source)?.name ?? edge.source}</span>
+          <b>{edge.type}</b>
+          <span>{trace.context_graph.nodes.find(node => node.id === edge.target)?.name ?? edge.target}</span>
+          <small>{edge.provenance}</small>
+        </article>
+      )}</div>
+    </section>
+    <section className="trace-source"><b>Trace provenance</b> {trace.source.event} event · {trace.source.decision} decision · recorded {new Date(trace.recorded_at).toLocaleString()}</section>
+    {trace.outcome && <section className="callout"><b>Observed outcome: {trace.outcome.status}</b><p>{trace.outcome.summary}</p></section>}
+  </section>;
+}
+
 function DecisionRecord({ record, onChanged }) {
   const [status, setStatus] = useState("fulfilled");
   const [notes, setNotes] = useState("");
   const [error, setError] = useState("");
+  const [traceOpen, setTraceOpen] = useState(false);
   const reasoning = record.reasoning_context ?? {};
 
   async function recordOutcome(event) {
@@ -1047,8 +1396,10 @@ function DecisionRecord({ record, onChanged }) {
   }
 
   return <article className="feedback-record">
-    <div className="record-heading"><div><span className="eyebrow">{record.id} · {record.decision_maker_name}</span><h4>Selected: {record.chosen_option_name}</h4></div><span className={record.choice_matches_prediction ? "match" : "different"}>{record.choice_matches_prediction ? "MATCHED PREDICTION" : "DIFFERED FROM PREDICTION"}</span></div>
-    <p className="hint">Predicted: {record.predicted_choice} ({record.predicted_choice_probability_percent.toFixed(1)}%); chosen option estimate: {record.chosen_option_probability_percent.toFixed(1)}% · Twin revision {record.twin_revision}</p>
+    <div className="record-heading"><div><span className="eyebrow">{record.id} · {record.decision_maker_name}</span><h4>Selected: {record.chosen_option_name}</h4></div><span className={record.predicted_choice ? record.choice_matches_prediction ? "match" : "different" : "chart-period"}>{record.predicted_choice ? record.choice_matches_prediction ? "MATCHED PREDICTION" : "DIFFERED FROM PREDICTION" : "NO PREDICTION"}</span></div>
+    <p className="hint">{record.predicted_choice ? `Predicted: ${record.predicted_choice} (${record.predicted_choice_probability_percent.toFixed(1)}%); chosen option estimate: ${record.chosen_option_probability_percent.toFixed(1)}%` : "This human decision was recorded without a model prediction."} · Twin revision {record.twin_revision}</p>
+    <button type="button" className="secondary-button trace-open-button" onClick={() => setTraceOpen(open => !open)}>{traceOpen ? "Close full trace" : "Explore complete decision trace"}</button>
+    {traceOpen && <DecisionTraceExplorer decisionId={record.id} />}
     {record.probabilities?.length > 0 && <div className="historical-details">
       <div className="historical-probabilities">{record.probabilities.map(option => <span key={option.option_id}>{option.option_name}: <b>{option.probability_percent.toFixed(1)}%</b></span>)}</div>
       <div className="preference-list"><span className="eyebrow">PREFERENCE WEIGHTS</span>{Object.entries(record.preference_weights ?? {}).map(([criterion, weight]) => <span key={criterion}>{criterion}: <b>{(weight * 100).toFixed(0)}%</b></span>)}</div>

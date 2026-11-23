@@ -104,6 +104,13 @@ NetworkX builds an in-memory undirected `MultiGraph` from the persisted records 
 
 The graph includes Situation, Parameter, Alternative, Criterion, DecisionMaker, Preference, Assessment, DecisionEvent, Prediction, Decision, Outcome, and extensible Context nodes. Seed provenance is marked as synthetic; interactive user-entered context and decisions use distinct provenance labels.
 
+## Decision trace and reviewed rule memory
+`GET /api/decisions/{decision_id}` reconstructs a decision from its persisted decision-time situation, alternative, preference, and human-reasoning snapshots. It returns predictions and Random Forest explanations separately from human rationale, includes model/dataset versions and extracted-rule evidence, and reports an outcome as `null` until one is recorded. Decision-time snapshots and published rule versions are protected from later mutation by SQLAlchemy guards and PostgreSQL triggers; application startup creates missing tables and applies the versioned trigger migrations.
+
+The experimental rule-memory API is under `/api/rules`: `POST /extract` creates candidate patterns only from observed human decisions; `GET /candidates`, `GET /{rule_id}/evidence`, and `GET /{rule_id}/history` expose candidates and provenance; `POST /{rule_id}/review` supports separate evidence and publication review; `POST /{rule_id}/publish` publishes approved immutable versions; `GET /relevant/{scenario_id}` retrieves matching published patterns without treating them as recommendations; and `POST /{rule_id}/feedback` records human relevance and outcome feedback. Rules retain model version, dataset hash, supporting and contradictory decision records, reviewer actions, and graph links. The reviewer-ID/role check is a prototype workflow control, not authentication: the application has no identity provider, so it must not be used as an authorization boundary in a deployed system.
+
+PostgreSQL integration tests are opt-in. Set `POSTGRES_TEST_DATABASE_URL` to a disposable PostgreSQL database before running `python -m unittest tests.test_postgresql` from `backend`; the suite creates a temporary schema and rolls it back. Do not point it at a production database. The regular backend test command continues to run without this variable, skipping PostgreSQL-only cases.
+
 ## Prototype layer behavior
 - The physical network is the mock baseline in `physical_network` within the domain configuration.
 - The digital twin starts from `digital_twin.state` and is updated in server memory by operational telemetry requests. Supplier availability and capacity gate candidate options, and the latest supplier performance scores feed the next assessment.

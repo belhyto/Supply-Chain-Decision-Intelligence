@@ -1,7 +1,7 @@
 from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Optional
-from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, event, inspect as sa_inspect
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .database import Base
 
@@ -22,6 +22,7 @@ class DecisionMaker(Base, TimestampMixin):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     preferences: Mapped[list["Preference"]] = relationship(back_populates="decision_maker", cascade="all, delete-orphan")
     decision_events: Mapped[list["DecisionEvent"]] = relationship(back_populates="decision_maker")
+    rule_reviews: Mapped[list["RuleReview"]] = relationship(back_populates="reviewer")
 
 class Situation(Base, TimestampMixin):
     __tablename__ = "situations"
@@ -36,6 +37,7 @@ class Situation(Base, TimestampMixin):
     alternatives: Mapped[list["Alternative"]] = relationship(back_populates="situation", cascade="all, delete-orphan")
     assessments: Mapped[list["Assessment"]] = relationship(back_populates="situation", cascade="all, delete-orphan")
     decision_events: Mapped[list["DecisionEvent"]] = relationship(back_populates="situation", cascade="all, delete-orphan")
+    rule_applications: Mapped[list["RuleApplication"]] = relationship(back_populates="situation")
 
 class Alternative(Base, TimestampMixin):
     __tablename__ = "alternatives"
@@ -100,6 +102,19 @@ class DecisionEvent(Base, TimestampMixin):
         uselist=False,
     )
 
+
+@event.listens_for(DecisionEvent, "before_update")
+def _prevent_decision_snapshot_mutation(mapper, connection, target) -> None:
+    history = sa_inspect(target).attrs.event_context.history
+    if not history.has_changes() or not history.deleted:
+        return
+    old_context = history.deleted[0] or {}
+    new_context = target.event_context or {}
+    for key in ("reasoning_snapshot", "human_reasoning"):
+        if key in old_context and old_context[key] != new_context.get(key):
+            raise ValueError(f"Decision-event {key} is immutable after recording.")
+
+
 class Prediction(Base, TimestampMixin):
     __tablename__ = "predictions"
     __table_args__ = (UniqueConstraint("decision_event_id", "alternative_id", "model_version", name="uq_prediction_event_alternative_model"), CheckConstraint("probability >= 0 AND probability <= 1", name="ck_prediction_probability_range"), Index("ix_predictions_event", "decision_event_id"))
@@ -127,6 +142,8 @@ class Decision(Base, TimestampMixin):
     decision_event: Mapped["DecisionEvent"] = relationship(back_populates="decision")
     chosen_alternative: Mapped["Alternative"] = relationship(back_populates="decisions")
     outcome: Mapped[Optional["Outcome"]] = relationship(back_populates="decision", cascade="all, delete-orphan", uselist=False)
+    rule_evidence: Mapped[list["RuleEvidence"]] = relationship(back_populates="decision")
+    rule_applications: Mapped[list["RuleApplication"]] = relationship(back_populates="decision")
 
 class Outcome(Base, TimestampMixin):
     __tablename__ = "outcomes"
@@ -139,6 +156,7 @@ class Outcome(Base, TimestampMixin):
     actual_observed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     observed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     decision: Mapped["Decision"] = relationship(back_populates="outcome")
+    rule_feedback: Mapped[list["RuleFeedback"]] = relationship(back_populates="outcome")
 
 class ModelExplanation(Base, TimestampMixin):
     __tablename__ = "model_explanations"
@@ -199,6 +217,220 @@ class ExtractedRule(Base, TimestampMixin):
     support_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     support_confidence: Mapped[float] = mapped_column(Float, default=0, nullable=False)
     model_explanation: Mapped["ModelExplanation"] = relationship(back_populates="extracted_rules")
+
+
+class RuleExtraction(Base, TimestampMixin):
+    __tablename__ = "rule_extractions"
+    __table_args__ = (
+        Index("ix_rule_extractions_dataset", "dataset_version"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    model_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    model_version: Mapped[str] = mapped_column(String(150), nullable=False)
+    dataset_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    extraction_method: Mapped[str] = mapped_column(String(100), nullable=False)
+    extraction_parameters: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="completed", nullable=False)
+    rules: Mapped[list["DecisionRule"]] = relationship(back_populates="extraction")
+
+
+class DecisionRule(Base, TimestampMixin):
+    __tablename__ = "decision_rules"
+    __table_args__ = (
+        UniqueConstraint(
+            "version_group",
+            "version",
+            name="uq_decision_rule_version_group",
+        ),
+        CheckConstraint("version >= 1", name="ck_decision_rule_version_positive"),
+        CheckConstraint(
+            "status IN ('PENDING_REVIEW', 'APPROVED_FOR_PUBLICATION', 'APPROVED', "
+            "'REJECTED', 'CHANGES_REQUESTED', 'DEPRECATED', 'SUPERSEDED')",
+            name="ck_decision_rule_status",
+        ),
+        Index("ix_decision_rules_status", "status"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    rule_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    conditions_json: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    observed_pattern: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    status: Mapped[str] = mapped_column(String(40), default="PENDING_REVIEW", nullable=False)
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    version_group: Mapped[str] = mapped_column(String(80), nullable=False)
+    extraction_id: Mapped[str] = mapped_column(
+        ForeignKey("rule_extractions.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    supersedes_rule_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("decision_rules.id", ondelete="SET NULL"),
+    )
+    published_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    extraction: Mapped["RuleExtraction"] = relationship(back_populates="rules")
+    supersedes: Mapped[Optional["DecisionRule"]] = relationship(remote_side=[id])
+    evidences: Mapped[list["RuleEvidence"]] = relationship(
+        back_populates="rule",
+        cascade="all, delete-orphan",
+    )
+    reviews: Mapped[list["RuleReview"]] = relationship(
+        back_populates="rule",
+        cascade="all, delete-orphan",
+    )
+    applications: Mapped[list["RuleApplication"]] = relationship(
+        back_populates="rule",
+        cascade="all, delete-orphan",
+    )
+    feedback: Mapped[list["RuleFeedback"]] = relationship(
+        back_populates="rule",
+        cascade="all, delete-orphan",
+    )
+
+
+@event.listens_for(DecisionRule, "before_update")
+def _prevent_published_rule_mutation(mapper, connection, target) -> None:
+    state = sa_inspect(target)
+    publication_history = state.attrs.published_at.history
+    was_published = (
+        target.published_at is not None and not publication_history.has_changes()
+    ) or bool(
+        publication_history.deleted
+        and publication_history.deleted[0] is not None
+    )
+    if not was_published:
+        return
+    for attribute in (
+        "rule_name",
+        "description",
+        "conditions_json",
+        "observed_pattern",
+        "version",
+        "version_group",
+        "extraction_id",
+    ):
+        if state.attrs[attribute].history.has_changes():
+            raise ValueError("Published decision-rule versions are immutable.")
+
+
+class RuleEvidence(Base, TimestampMixin):
+    __tablename__ = "rule_evidence"
+    __table_args__ = (
+        UniqueConstraint("rule_id", "decision_id", name="uq_rule_evidence_decision"),
+        CheckConstraint(
+            "evidence_type IN ('supporting', 'contradictory')",
+            name="ck_rule_evidence_type",
+        ),
+        Index("ix_rule_evidence_decision", "decision_id"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    rule_id: Mapped[str] = mapped_column(
+        ForeignKey("decision_rules.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    decision_id: Mapped[int] = mapped_column(
+        ForeignKey("decisions.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    evidence_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    evidence_description: Mapped[str] = mapped_column(Text, nullable=False)
+    rule: Mapped["DecisionRule"] = relationship(back_populates="evidences")
+    decision: Mapped["Decision"] = relationship(back_populates="rule_evidence")
+
+
+class RuleReview(Base, TimestampMixin):
+    __tablename__ = "rule_reviews"
+    __table_args__ = (
+        CheckConstraint(
+            "review_stage IN ('evidence', 'publication')",
+            name="ck_rule_review_stage",
+        ),
+        CheckConstraint(
+            "review_decision IN ('approved', 'rejected', 'changes_requested', "
+            "'request_additional_evidence')",
+            name="ck_rule_review_decision",
+        ),
+        Index("ix_rule_reviews_rule", "rule_id"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    rule_id: Mapped[str] = mapped_column(
+        ForeignKey("decision_rules.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    reviewer_id: Mapped[str] = mapped_column(
+        ForeignKey("decision_makers.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    reviewer_role: Mapped[str] = mapped_column(String(150), nullable=False)
+    review_stage: Mapped[str] = mapped_column(String(30), nullable=False)
+    review_decision: Mapped[str] = mapped_column(String(40), nullable=False)
+    comments: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    modified_conditions: Mapped[Optional[list]] = mapped_column(JSON)
+    reviewed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        nullable=False,
+    )
+    rule: Mapped["DecisionRule"] = relationship(back_populates="reviews")
+    reviewer: Mapped["DecisionMaker"] = relationship(back_populates="rule_reviews")
+
+
+class RuleApplication(Base, TimestampMixin):
+    __tablename__ = "rule_applications"
+    __table_args__ = (
+        CheckConstraint(
+            "relevance_status IN ('not_reviewed', 'relevant', 'not_relevant')",
+            name="ck_rule_application_relevance",
+        ),
+        Index("ix_rule_applications_situation", "situation_id"),
+        Index("ix_rule_applications_decision", "decision_id"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    rule_id: Mapped[str] = mapped_column(
+        ForeignKey("decision_rules.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    situation_id: Mapped[str] = mapped_column(
+        ForeignKey("situations.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    decision_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("decisions.id", ondelete="SET NULL"),
+    )
+    relevance_status: Mapped[str] = mapped_column(
+        String(20),
+        default="not_reviewed",
+        nullable=False,
+    )
+    considered_by_human: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    feedback: Mapped[Optional[str]] = mapped_column(Text)
+    rule_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    rule: Mapped["DecisionRule"] = relationship(back_populates="applications")
+    situation: Mapped["Situation"] = relationship(back_populates="rule_applications")
+    decision: Mapped[Optional["Decision"]] = relationship(back_populates="rule_applications")
+
+
+class RuleFeedback(Base, TimestampMixin):
+    __tablename__ = "rule_feedback"
+    __table_args__ = (
+        CheckConstraint(
+            "feedback_type IN ('supporting', 'conflicting', 'inconclusive')",
+            name="ck_rule_feedback_type",
+        ),
+        Index("ix_rule_feedback_outcome", "outcome_id"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    rule_id: Mapped[str] = mapped_column(
+        ForeignKey("decision_rules.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    outcome_id: Mapped[int] = mapped_column(
+        ForeignKey("outcomes.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    feedback_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    comments: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    rule: Mapped["DecisionRule"] = relationship(back_populates="feedback")
+    outcome: Mapped["Outcome"] = relationship(back_populates="rule_feedback")
+
 
 class ContextNode(Base, TimestampMixin):
     __tablename__ = "context_graph_nodes"

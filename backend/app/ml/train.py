@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import math
 import os
 import sys
 from dataclasses import dataclass
@@ -53,6 +55,9 @@ class TrainingDataset:
     alternative_codes: tuple[str, ...]
     numeric_features: tuple[str, ...]
     categorical_features: tuple[str, ...]
+    decision_ids: list[int]
+    decision_maker_ids: list[str]
+    decision_times: list[str]
 
 
 def load_training_dataset(
@@ -136,6 +141,9 @@ def load_training_dataset(
     rows: list[dict[str, Any]] = []
     labels: list[str] = []
     groups: list[str] = []
+    decision_ids: list[int] = []
+    decision_maker_ids: list[str] = []
+    decision_times: list[str] = []
     for decision in decisions:
         event = events.get(decision.decision_event_id)
         if event is None:
@@ -213,6 +221,9 @@ def load_training_dataset(
         ))
         labels.append(chosen_alternative.code)
         groups.append(situation.id)
+        decision_ids.append(decision.id)
+        decision_maker_ids.append(event.decision_maker_id)
+        decision_times.append(decision.decided_at.isoformat())
 
     if not rows:
         raise TrainingDataError("No synthetic decisions are available for model training.")
@@ -228,6 +239,9 @@ def load_training_dataset(
         alternative_codes=alternative_codes,
         numeric_features=tuple(numeric),
         categorical_features=tuple(categorical),
+        decision_ids=decision_ids,
+        decision_maker_ids=decision_maker_ids,
+        decision_times=decision_times,
     )
 
 
@@ -306,16 +320,37 @@ def train_model(
 
     model = _build_pipeline(dataset, model_name)
     model.fit(feature_rows, labels)
+    trained_at = datetime.now(timezone.utc).isoformat()
+    dataset_digest = hashlib.sha256(json.dumps(
+        {
+            "rows": [
+                {
+                    key: None if isinstance(value, float) and not math.isfinite(value) else value
+                    for key, value in row.items()
+                }
+                for row in dataset.rows
+            ],
+            "labels": dataset.labels,
+            "groups": dataset.groups,
+            "decision_ids": dataset.decision_ids,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+        allow_nan=False,
+    ).encode("utf-8")).hexdigest()
     metadata = {
         "model_name": model_name,
+        "model_version": f"{model_name}:{trained_at}",
         "training_data_source": decision_source,
+        "dataset_version": f"sha256:{dataset_digest}",
         "training_sample_count": len(dataset.rows),
         "training_scenario_count": len(set(dataset.groups)),
         "criteria": list(dataset.criteria),
         "alternative_codes": list(dataset.alternative_codes),
         "numeric_features": list(dataset.numeric_features),
         "categorical_features": list(dataset.categorical_features),
-        "trained_at": datetime.now(timezone.utc).isoformat(),
+        "trained_at": trained_at,
         "group_split": {
             "strategy": "GroupShuffleSplit",
             "test_size": 0.25,
