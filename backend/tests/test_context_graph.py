@@ -88,15 +88,15 @@ class ContextGraphTests(unittest.TestCase):
             )
         }
         self.assertEqual(counts, {
-            "situations": 8,
-            "alternatives": 24,
+            "situations": len(TRAINING_DATA["scenarios"]),
+            "alternatives": len(TRAINING_DATA["scenarios"]) * 3,
             "decision_makers": 4,
             "preferences": 4,
-            "assessments": 24,
-            "decision_events": 32,
-            "predictions": 96,
-            "decisions": 32,
-            "outcomes": 32,
+            "assessments": len(TRAINING_DATA["scenarios"]) * 3,
+            "decision_events": len(TRAINING_DATA["decisions"]),
+            "predictions": len(TRAINING_DATA["decisions"]) * 3,
+            "decisions": len(TRAINING_DATA["decisions"]),
+            "outcomes": len(TRAINING_DATA["decisions"]),
         })
 
         scenario = self.session.get(models.Situation, "SCN-001")
@@ -256,9 +256,9 @@ class ContextGraphTests(unittest.TestCase):
         self.assertGreater(node_count, 0)
         self.assertGreater(relationship_count, 0)
         self.assertEqual((node_count, relationship_count), counts_before)
-        self.assertEqual(situation_count, 8)
-        self.assertEqual(decision_count, 32)
-        self.assertEqual(outcome_count, 32)
+        self.assertEqual(situation_count, len(TRAINING_DATA["scenarios"]))
+        self.assertEqual(decision_count, len(TRAINING_DATA["decisions"]))
+        self.assertEqual(outcome_count, len(TRAINING_DATA["decisions"]))
 
 
 if __name__ == "__main__":

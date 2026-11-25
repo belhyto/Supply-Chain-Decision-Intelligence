@@ -4,12 +4,12 @@ This fixture is synthetic. It is intended for exercising scenario selection, sui
 
 ## Dataset size
 
-- 8 scenarios (`SCN-001` through `SCN-008`)
-- 3 supplier alternatives per scenario (24 rows)
+- 24 synthetic scenarios (`SCN-001` through `SCN-024`)
+- 3 supplier alternatives per scenario (72 rows)
 - 4 decision-maker profiles
-- 32 recorded decisions (one per scenario/profile pair)
-- 24 suitability assessments and 96 alternative-level choice probabilities when seeded to PostgreSQL
-- 32 corresponding synthetic outcome examples (one per decision)
+- 96 recorded synthetic choices (one per scenario/profile pair)
+- 72 suitability assessments and 288 alternative-level choice probabilities when seeded to PostgreSQL
+- 96 corresponding synthetic outcome examples (one per decision)
 
 `SCN-001` is the supplier-disruption example: 30% demand increase, five inventory days, a 20-day inventory target, a seven-day delivery deadline, and a ₹20 lakh budget. Its three suitability scores are 75.25, 82.25, and 82.25. Its decision probabilities are supplied illustrative values and are not calibrated human-behavior predictions.
 
@@ -31,23 +31,23 @@ The `/api/training/evaluation` endpoint reports top-choice agreement, multiclass
 
 ## Use in the prototype
 
-Select one of the eight scenarios in the dashboard. Its operational context and alternatives feed the existing three-stage pipeline. Stage 3 displays that scenario's four recorded choices and outcomes alongside descriptive evaluation metrics across all 32 records. The API also exposes the underlying joined decision data.
+Select any of the 24 scenarios in the dashboard. Its operational context and alternatives feed the existing three-stage pipeline. Stage 3 displays that scenario's four recorded choices and outcomes alongside descriptive evaluation metrics across all 96 records. Scenarios `SCN-009` through `SCN-024` are generated reproducibly by `generate_synthetic_expansion.py`; the script appends synthetic alternatives, choices, and outcomes to the CSV fixture.
 
 The normal decision-feedback forms remain separate from this static fixture; interactive decisions and outcomes are persisted in PostgreSQL and linked into the context graph.
 
 ## ML models and decision explanations
 
-With the PostgreSQL fixture seeded, train the logistic regression prototype from the `backend` directory. The command also attempts to train the experimental Random Forest from observed human decisions:
+With the PostgreSQL fixture seeded, train the logistic regression prototype from the `backend` directory. The command also attempts to train the experimental Random Forest from observed human decisions by default:
 
 ```powershell
 python -m app.ml.train
 ```
 
-Logistic regression trains on the 32 synthetic decision records. Its features include scenario numeric parameters, each decision-maker's criterion weights, each alternative's criterion scores, availability and capacity, and categorical decision-maker role and situation risk. It uses median imputation, `StandardScaler`, and `OneHotEncoder`. A `GroupShuffleSplit` holds out complete scenario IDs for a prototype score, then the production pipeline is fit on all synthetic records.
+Logistic regression trains on the 96 synthetic decision records. Its features include scenario numeric parameters, each decision-maker's criterion weights, each alternative's criterion scores, availability and capacity, and categorical decision-maker role and situation risk. It uses median imputation, `StandardScaler`, and `OneHotEncoder`. A `GroupShuffleSplit` holds out complete scenario IDs for a prototype score, then the production pipeline is fit on all synthetic records.
 
-Random Forest is not trained on the synthetic fixture. It requires observed human decisions across at least four distinct scenarios and recorded examples for all alternatives. Until those records exist, the training command reports that it remains untrained, and the API will not load a stale model trained on synthetic labels. Once sufficient observed data is available, the model uses the same pre-choice situation, preference, alternative-score, availability, capacity, and role features; human-stated post-choice factors and rationale are deliberately excluded to avoid label leakage. It uses median imputation and `OneHotEncoder`, with no numeric scaling.
+Random Forest defaults to observed human decisions across at least four distinct scenarios and recorded examples for all alternatives. For a synthetic demonstration model, explicitly run `python -m app.ml.train --random-forest-source synthetic`; this trains on generated labels and the API marks the resulting predictions as synthetic. Its grouped holdout reports accuracy, balanced accuracy, macro-F1, multiclass Brier score, and per-class metrics. The holdout separates whole scenarios. These scores assess only agreement with this synthetic fixture and do not validate human-behavior predictions. In either mode, features use pre-choice situation, preference, alternative-score, availability, capacity, and role data; human-stated post-choice factors and rationale are excluded to avoid label leakage. Random Forest uses median imputation and `OneHotEncoder`, with no numeric scaling.
 
-The decision-feedback dashboard keeps **Multinomial logistic regression** as the default. **Experimental historical pattern analysis · Random Forest** is available only after training on observed human choices. Random Forest's output includes forest vote distribution, global feature importance, recurring split conditions, and representative tree paths. Those are patterns in the model—not the actual reasoning behind any individual decision. SHAP is not currently calculated.
+The decision-feedback dashboard keeps **Multinomial logistic regression** as the default. **Experimental historical pattern analysis · Random Forest** is available after training on either observed human choices or the explicitly selected synthetic demo source. Random Forest's output includes its training source, forest vote distribution, global feature importance, recurring split conditions, and representative tree paths. Those are patterns in the model—not the actual reasoning behind any individual decision. Rule-memory extraction remains observed-human-only. SHAP is not currently calculated.
 
 Request a decision-maker-specific prediction:
 

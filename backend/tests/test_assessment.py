@@ -100,17 +100,17 @@ class AssessmentTests(unittest.TestCase):
         self.assertEqual(error.exception.status_code, 422)
 
     def test_synthetic_dataset_has_expected_scenarios_decisions_and_profiles(self):
-        self.assertEqual(len(main.TRAINING_DATA["scenarios"]), 8)
+        self.assertEqual(len(main.TRAINING_DATA["scenarios"]), 24)
         self.assertEqual(len(main.TRAINING_DATA["profiles"]), 4)
-        self.assertEqual(len(main.TRAINING_DATA["decisions"]), 32)
+        self.assertEqual(len(main.TRAINING_DATA["decisions"]), 96)
         self.assertTrue(all(len(item["options"]) == 3 for item in main.TRAINING_DATA["scenarios"].values()))
         self.assertTrue(all("outcome" in item for item in main.TRAINING_DATA["decisions"]))
 
     def test_training_evaluation_keeps_model_prediction_and_recorded_choice_distinct(self):
         result = main.evaluate_training_data()
 
-        self.assertEqual(result["sample_count"], 32)
-        self.assertEqual(len(result["records"]), 32)
+        self.assertEqual(result["sample_count"], len(main.TRAINING_DATA["decisions"]))
+        self.assertEqual(len(result["records"]), len(main.TRAINING_DATA["decisions"]))
         self.assertIn("predicted_choice", result["records"][0])
         self.assertIn("recorded_choice", result["records"][0])
         self.assertIn("outcome", result["records"][0])

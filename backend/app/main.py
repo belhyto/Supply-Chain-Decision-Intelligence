@@ -225,14 +225,18 @@ def load_training_data() -> dict:
         for scenario_id in scenarios
         for profile in profiles
     }
+    expected_decision_count = len(scenarios) * len(profiles)
     if (
-        len(scenarios) != 8
+        len(scenarios) < 8
         or len(profiles) != 4
-        or len(decisions) != 32
+        or len(decisions) != expected_decision_count
         or decision_pairs != expected_pairs
         or len(decision_pairs) != len(decisions)
     ):
-        raise ValueError("Training data must contain 8 scenarios, 4 decision-maker profiles, and 32 decisions.")
+        raise ValueError(
+            "Training data must contain at least 8 scenarios, exactly 4 decision-maker profiles, "
+            "and one decision per scenario/profile pair."
+        )
     return {"scenarios": scenarios, "profiles": profiles, "decisions": decisions}
 
 
@@ -2050,6 +2054,7 @@ def feedback_record(event: DecisionEvent, decision: Decision) -> dict:
         "model_explanation": (
             {
                 "model_version": event.model_explanation.model_version,
+                "training_data_source": event_context.get("training_data_source"),
                 "top_features": event.model_explanation.top_features,
                 "tree_vote_summary": event.model_explanation.tree_vote_summary,
                 "rule_paths": event.model_explanation.rule_paths,
@@ -2147,6 +2152,9 @@ def get_decision_trace(decision_id: str, db: Session = Depends(get_db)):
             "model_versions": sorted({
                 prediction.model_version for prediction in event.predictions
             }),
+            "training_data_sources": sorted({
+                event_context.get("training_data_source")
+            } - {None}),
         },
         "operational_objective": human_reasoning.get(
             "operational_objective",
@@ -2194,6 +2202,7 @@ def get_decision_trace(decision_id: str, db: Session = Depends(get_db)):
         "model_explanation": (
             {
                 "model_version": explanation.model_version,
+                "training_data_source": event_context.get("training_data_source"),
                 "top_features": explanation.top_features,
                 "tree_vote_summary": explanation.tree_vote_summary,
                 "rule_paths": explanation.rule_paths,

@@ -127,15 +127,15 @@ def seed_postgresql() -> dict[str, int]:
         }
 
     expected = {
-        "situations": 8,
-        "alternatives": 24,
+        "situations": len(scenario_ids),
+        "alternatives": len(scenario_ids) * 3,
         "decision_makers": 4,
         "preferences": 4,
-        "assessments": 24,
-        "decision_events": 32,
-        "predictions": 96,
-        "decisions": 32,
-        "outcomes": 32,
+        "assessments": len(scenario_ids) * 3,
+        "decision_events": len(event_ids),
+        "predictions": len(event_ids) * 3,
+        "decisions": len(event_ids),
+        "outcomes": len(event_ids),
     }
     mismatches = {
         table: {"expected": expected_count, "actual": counts[table]}

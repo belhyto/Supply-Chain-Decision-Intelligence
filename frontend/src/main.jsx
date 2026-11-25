@@ -4,6 +4,35 @@ import "./styles.css";
 
 const API = "/api";
 
+async function readApiResponse(response, operation) {
+  const responseText = await response.text();
+  let body = null;
+  let invalidJson = false;
+  if (responseText) {
+    try {
+      body = JSON.parse(responseText);
+    } catch {
+      invalidJson = true;
+    }
+  }
+
+  if (!response.ok) {
+    const detail = typeof body?.detail === "string"
+      ? body.detail
+      : invalidJson && !/^\s*</.test(responseText)
+        ? responseText.slice(0, 240)
+        : response.statusText || "The server returned an error.";
+    const backendHint = response.status >= 500
+      ? " Check the FastAPI backend terminal for details."
+      : "";
+    throw new Error(`${operation} failed (HTTP ${response.status}): ${detail}.${backendHint}`);
+  }
+  if (invalidJson) {
+    throw new Error(`${operation} returned an invalid response from the server.`);
+  }
+  return body ?? {};
+}
+
 function ScoreBar({ value, max = 100 }) {
   return <div className="bar"><div style={{ width: `${Math.min(100, value / max * 100)}%` }} /></div>;
 }
@@ -156,7 +185,7 @@ function App() {
             </nav>
             {result && activeStage === 1 && <StageOne result={result} data={data} />}
             {result && activeStage === 2 && <StageTwo result={result} criteria={data.criteria} />}
-            {result && activeStage === 3 && <StageThree result={result} temperature={temperature} setTemperature={(value) => { setTemperature(value); runAssessment(value); }} trainingEvaluation={trainingEvaluation} scenarioId={selectedScenario} />}
+            {result && activeStage === 3 && <StageThree result={result} data={data} temperature={temperature} setTemperature={(value) => { setTemperature(value); runAssessment(value); }} trainingEvaluation={trainingEvaluation} scenarioId={selectedScenario} />}
           </>}
           {activeLayer === 4 && <FeedbackLayer data={data} records={feedback} onChanged={refreshFeedback} scenarioId={selectedScenario} />}
           {activeLayer === 5 && <KnowledgeGraphLayer scenarioId={selectedScenario} />}
@@ -167,8 +196,7 @@ function App() {
             onChanged={async () => { await refreshFeedback(); }}
           />}
           <footer>
-            <span>DIGITAL TWIN / MOCK OPERATIONAL DATA</span>
-            <span>Illustrative decision support · Human decision remains final</span>
+          
           </footer>
         </>
       )}
@@ -905,8 +933,7 @@ function FeedbackLayer({ data, records, onChanged, scenarioId }) {
           model_name: modelName
         })
       });
-      const body = await response.json();
-      if (!response.ok) throw new Error(body.detail ?? "Model prediction could not be generated.");
+      const body = await readApiResponse(response, "Model prediction");
       setPrediction(body);
       setOperationalObjective(current => current || body.reasoning_snapshot?.operational_objective || "");
       setConsideredAlternativeIds(
@@ -946,8 +973,7 @@ function FeedbackLayer({ data, records, onChanged, scenarioId }) {
           confidence: confidence === "" ? null : Number(confidence) / 100
         })
       });
-      const body = await response.json();
-      if (!response.ok) throw new Error(body.detail ?? "Decision could not be recorded.");
+      const body = await readApiResponse(response, "Human decision recording");
       setDecisionRecorded(true);
       setMessage(
         `Recorded ${body.chosen_option_name}. It ${
@@ -979,7 +1005,7 @@ function FeedbackLayer({ data, records, onChanged, scenarioId }) {
       <label className="feedback-decision-maker">Decision-maker<select value={decisionMakerId} onChange={event => setDecisionMakerId(event.target.value)}>{data.decision_makers.map(person => <option key={person.id} value={person.id}>{person.name} · {person.role}</option>)}</select></label>
       <label className="feedback-decision-maker">Prediction model<select value={modelName} onChange={event => setModelName(event.target.value)}>
         <option value="multinomial_logistic_regression">Multinomial logistic regression</option>
-        <option value="random_forest">Experimental historical pattern analysis · Random Forest</option>
+        <option value="random_forest">Experimental Random Forest · source selected during training</option>
       </select></label>
       {decisionMaker && <div className="preference-profile">
         <span className="eyebrow">PREFERENCE PROFILE · {decisionMaker.role}</span>
@@ -991,12 +1017,16 @@ function FeedbackLayer({ data, records, onChanged, scenarioId }) {
           <div className="probability-label"><span>{item.alternative_name}</span><b>{item.probability_percent.toFixed(1)}%</b></div>
           <ScoreBar value={item.probability_percent} />
         </div>)}
-        <p className="hint">{prediction.model.name} · prediction {prediction.prediction_run_id} · {prediction.disclaimer}</p>
+        <p className="hint">{prediction.model.name} · trained on {prediction.model.training_data_source} · prediction {prediction.prediction_run_id} · {prediction.disclaimer}</p>
       </div>}
+      {prediction?.model.name === "random_forest" && prediction.model.group_split?.holdout_metrics && (
+        <RandomForestEvaluation model={prediction.model} />
+      )}
       {prediction?.reasoning_snapshot && <SituationDecisionSnapshot snapshot={prediction.reasoning_snapshot} />}
       {prediction?.explanation && <ModelPatternPanel
         explanation={prediction.explanation}
         alternatives={prediction.reasoning_snapshot?.alternatives ?? []}
+        trainingDataSource={prediction.model.training_data_source}
       />}
       <div className="demo-input-card">
         <div><span className="eyebrow">DEMO INPUT · SCN-001</span><b>Procurement Manager → Supplier A</b><small>Objective: replenish 1,200 filters within seven days and the ₹20 lakh budget. Human rationale: “Supplier A meets the cost requirement.”</small></div>
@@ -1076,11 +1106,11 @@ function SituationDecisionSnapshot({ snapshot }) {
   </section>;
 }
 
-function ModelPatternPanel({ explanation, alternatives = [] }) {
+function ModelPatternPanel({ explanation, alternatives = [], trainingDataSource }) {
   const namesByCode = Object.fromEntries(alternatives.map(alternative => [alternative.code, alternative.name]));
   return <section className="model-pattern-panel">
     <div className="chart-heading">
-      <div><h4>Experimental Random Forest patterns</h4><p className="hint">Patterns learned from historical human choices; these do not explain this decision-maker's thoughts.</p></div>
+      <div><h4>Experimental Random Forest patterns</h4><p className="hint">{trainingDataSource === "synthetic" ? "Patterns learned from synthetic demonstration choices; they are not evidence about real decision-makers or this person's reasoning." : trainingDataSource === "observed_human" ? "Patterns learned from historical human choices; these do not explain this decision-maker's thoughts." : "Training source unavailable; these model-derived patterns do not explain this decision-maker's thoughts."}</p></div>
       <span className="chart-period">MODEL-DERIVED</span>
     </div>
     <div className="pattern-votes">
@@ -1119,6 +1149,30 @@ function ModelPatternPanel({ explanation, alternatives = [] }) {
         </div>
       )}
     </details>}
+  </section>;
+}
+
+function RandomForestEvaluation({ model }) {
+  const metrics = model.group_split.holdout_metrics;
+  return <section className="panel">
+    <div className="chart-heading">
+      <div><h3>Random Forest grouped-holdout evaluation</h3><p className="hint">Entire scenarios were held out from fitting; metrics compare predictions against {model.training_data_source === "synthetic" ? "synthetic demonstration choices." : model.training_data_source === "observed_human" ? "observed human choices." : "recorded choices."}</p></div>
+      <span className="chart-period">{model.group_split.holdout_scenario_ids.length} HELD-OUT SCENARIOS</span>
+    </div>
+    <div className="prediction-metrics">
+      <MetricCard title="Holdout accuracy" value={`${(metrics.accuracy * 100).toFixed(1)}%`} detail={`${model.group_split.holdout_sample_count} held-out decisions`} />
+      <MetricCard title="Balanced accuracy" value={`${(metrics.balanced_accuracy * 100).toFixed(1)}%`} detail="Average class recall" />
+      <MetricCard title="Macro F1" value={metrics.macro_f1.toFixed(3)} detail="Unweighted class-average F1" />
+      <MetricCard title="Multiclass Brier" value={metrics.multiclass_brier_score.toFixed(3)} detail="Lower is better" />
+    </div>
+    <p className="disclaimer">
+      {model.training_data_source === "synthetic"
+        ? "Synthetic demonstration evaluation only; this does not validate predictions of real human behavior."
+        : model.training_data_source === "observed_human"
+          ? "Evaluation uses observed historical choices; it is still not proof of future human behavior."
+          : "The training source is unknown, so these metrics should not be used as evidence of predictive validity."}
+      {" "}Held-out scenarios: {model.group_split.holdout_scenario_ids.join(", ")}.
+    </p>
   </section>;
 }
 
@@ -1170,7 +1224,7 @@ function PredictionDashboard({ prediction, records }) {
     <section className="prediction-metrics">
       <MetricCard title="Predictions in view" value={records.length + Number(Boolean(prediction))} detail="Current model run + recorded cases" />
       <MetricCard title="Human decisions" value={records.length} detail="Separately recorded choices" />
-      <MetricCard title="Observed agreement" value={agreementRate === null ? "—" : `${agreementRate.toFixed(1)}%`} detail="Logged decisions only · not model accuracy" />
+    { /* <MetricCard title="Observed agreement" value={agreementRate === null ? "—" : `${agreementRate.toFixed(1)}%`} detail="Logged decisions only · not model accuracy" /> */}
       <MetricCard title="Outcomes captured" value={outcomesCount} detail={records.length ? `Of ${records.length} human decisions` : "No outcomes recorded yet"} />
     </section>
     <div className="prediction-chart-grid">
@@ -1325,7 +1379,7 @@ function DecisionTraceExplorer({ decisionId }) {
           </p>)
           : <p>No prediction was generated for this decision.</p>}
         {model ? <>
-          <p><b>Explanation version:</b> {model.model_version} · {model.source}</p>
+          <p><b>Explanation version:</b> {model.model_version} · {model.source} · trained on {model.training_data_source ?? "unknown source"}</p>
           <div className="trace-feature-list">{model.top_features?.slice(0, 5).map(feature =>
             <span key={feature.feature_name}>{feature.feature_name}: {(feature.importance * 100).toFixed(1)}%</span>
           )}</div>
@@ -1421,6 +1475,7 @@ function DecisionRecord({ record, onChanged }) {
     {record.model_explanation && <ModelPatternPanel
       explanation={record.model_explanation}
       alternatives={record.reasoning_snapshot?.alternatives ?? []}
+      trainingDataSource={record.model_explanation.training_data_source}
     />}
     {record.outcome ? <div className="callout"><b>Outcome: {record.outcome.status}</b>{record.outcome.notes && <><br/><small>{record.outcome.notes}</small></>}</div> : <form className="outcome-form" onSubmit={recordOutcome}><label>Observed result<select value={status} onChange={event => setStatus(event.target.value)}><option value="fulfilled">Fulfilled</option><option value="delayed">Delayed</option><option value="partial">Partial</option><option value="failed">Failed</option></select></label><label>Outcome notes<input value={notes} onChange={event => setNotes(event.target.value)} placeholder="Delivery time, quantity, or cost observed" /></label><button type="button" className="secondary-button outcome-demo-button" onClick={() => { setStatus("fulfilled"); setNotes("1,200 units arrived before the 7-day deadline; no stockout occurred."); }}>Fill sample outcome</button><button type="submit" className="secondary-button">Save outcome</button></form>}
     {error && <p className="inline-error">{error}</p>}
@@ -1477,7 +1532,7 @@ function StageTwo({ result, criteria }) {
   </>;
 }
 
-function StageThree({ result, temperature, setTemperature, trainingEvaluation, scenarioId }) {
+function StageThree({ result, data, temperature, setTemperature, trainingEvaluation, scenarioId }) {
   const scenarioRecords = trainingEvaluation?.records.filter(record => record.scenario_id === scenarioId) ?? [];
   const scenarioDisagreement = trainingEvaluation?.scenario_disagreement.find(scenario => scenario.scenario_id === scenarioId);
   return <>
@@ -1509,7 +1564,7 @@ function StageThree({ result, temperature, setTemperature, trainingEvaluation, s
     <section className="panel training-panel">
       <div className="section-heading"><div><div className="eyebrow">SYNTHETIC TRAINING EVALUATION</div><h2>Recorded choices vs. model output</h2></div><div className="badge">{trainingEvaluation?.sample_count ?? 0} RECORDS</div></div>
       <p className="intro">These descriptive metrics compare model top choices and probabilities with the synthetic recorded decisions. They are workflow/test metrics, not validated estimates of real people.</p>
-      <div className="twin-summary"><div><span className="eyebrow">TOP-CHOICE MATCH</span><b>{trainingEvaluation?.top_choice_accuracy_percent ?? "—"}%</b></div><div><span className="eyebrow">MEAN MULTICLASS BRIER SCORE</span><b>{trainingEvaluation?.mean_multiclass_brier_score ?? "—"}</b></div><div><span className="eyebrow">SCOPE</span><b>All 8 synthetic scenarios</b></div></div>
+      <div className="twin-summary"><div><span className="eyebrow">TOP-CHOICE MATCH</span><b>{trainingEvaluation?.top_choice_accuracy_percent ?? "—"}%</b></div><div><span className="eyebrow">MEAN MULTICLASS BRIER SCORE</span><b>{trainingEvaluation?.mean_multiclass_brier_score ?? "—"}</b></div><div><span className="eyebrow">SCOPE</span><b>{data.training_scenarios.length} synthetic scenarios</b></div></div>
       {trainingEvaluation?.interpretation && <p className="disclaimer">{trainingEvaluation.interpretation}</p>}
       <h3>Decision records for {result.scenario.id}</h3>
       {scenarioDisagreement && <p className="hint disagreement-summary">Recorded decisions selected <b>{scenarioDisagreement.distinct_recorded_choices}</b> distinct alternatives, producing <b>{scenarioDisagreement.pairwise_disagreement_count}</b> differing decision-maker pairs out of {scenarioDisagreement.decision_count * (scenarioDisagreement.decision_count - 1) / 2}.</p>}

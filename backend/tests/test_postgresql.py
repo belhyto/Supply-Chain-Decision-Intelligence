@@ -215,6 +215,11 @@ class PostgreSQLWorkflowTests(unittest.TestCase):
         )
         self.assertIsNotNone(trace["model_explanation"])
         self.assertEqual(trace["model_explanation"]["source"], "model")
+        self.assertEqual(
+            trace["model_explanation"]["training_data_source"],
+            "observed_human",
+        )
+        self.assertEqual(trace["source"]["training_data_sources"], ["observed_human"])
         self.assertIn("model_version", trace["model_explanation"])
         self.assertTrue(trace["model_explanation"]["extracted_rules"])
         self.assertTrue(all(

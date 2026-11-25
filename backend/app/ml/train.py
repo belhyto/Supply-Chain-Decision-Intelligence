@@ -5,10 +5,11 @@ import hashlib
 import math
 import os
 import sys
+import argparse
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import joblib
 import numpy as np
@@ -16,6 +17,12 @@ from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import (
+    accuracy_score,
+    balanced_accuracy_score,
+    classification_report,
+    f1_score,
+)
 from sklearn.model_selection import GroupShuffleSplit
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
@@ -282,13 +289,18 @@ def train_model(
     session: Session,
     model_path: Path | None = None,
     model_name: ModelName = DEFAULT_MODEL_NAME,
+    training_data_source: Literal["synthetic", "observed_human"] | None = None,
 ) -> dict[str, Any]:
     if model_name not in MODEL_ARTIFACT_PATHS:
         raise ValueError(f"Unsupported model: {model_name}")
     model_path = model_path or MODEL_ARTIFACT_PATHS[model_name]
-    decision_source = (
+    decision_source = training_data_source or (
         "observed_human" if model_name == "random_forest" else "synthetic"
     )
+    if decision_source not in {"synthetic", "observed_human"}:
+        raise ValueError("Training data source must be synthetic or observed_human.")
+    if model_name != "random_forest" and decision_source != "synthetic":
+        raise ValueError("Multinomial logistic regression uses the synthetic fixture.")
     dataset = load_training_dataset(session, decision_source=decision_source)
     feature_rows = feature_matrix(
         dataset.rows,
@@ -313,10 +325,39 @@ def train_model(
 
     evaluation_model = _build_pipeline(dataset, model_name)
     evaluation_model.fit(feature_rows[train_indices], labels[train_indices])
-    holdout_accuracy = float(evaluation_model.score(
-        feature_rows[test_indices],
-        labels[test_indices],
-    ))
+    holdout_predictions = evaluation_model.predict(feature_rows[test_indices])
+    holdout_probabilities = evaluation_model.predict_proba(feature_rows[test_indices])
+    classifier_classes = evaluation_model.named_steps["classifier"].classes_
+    holdout_actual = labels[test_indices]
+    holdout_one_hot = np.asarray([
+        [float(label == class_name) for class_name in classifier_classes]
+        for label in holdout_actual
+    ])
+    holdout_metrics = {
+        "accuracy": float(accuracy_score(holdout_actual, holdout_predictions)),
+        "balanced_accuracy": float(
+            balanced_accuracy_score(holdout_actual, holdout_predictions)
+        ),
+        "macro_f1": float(
+            f1_score(
+                holdout_actual,
+                holdout_predictions,
+                labels=dataset.alternative_codes,
+                average="macro",
+                zero_division=0,
+            )
+        ),
+        "multiclass_brier_score": float(
+            np.mean(np.sum((holdout_probabilities - holdout_one_hot) ** 2, axis=1))
+        ),
+        "per_class": classification_report(
+            holdout_actual,
+            holdout_predictions,
+            labels=dataset.alternative_codes,
+            output_dict=True,
+            zero_division=0,
+        ),
+    }
 
     model = _build_pipeline(dataset, model_name)
     model.fit(feature_rows, labels)
@@ -359,7 +400,8 @@ def train_model(
             "holdout_scenario_ids": holdout_scenarios,
             "training_sample_count": int(len(train_indices)),
             "holdout_sample_count": int(len(test_indices)),
-            "holdout_accuracy": holdout_accuracy,
+            "holdout_accuracy": holdout_metrics["accuracy"],
+            "holdout_metrics": holdout_metrics,
         },
     }
     if model_name == "random_forest":
@@ -380,12 +422,31 @@ def main() -> None:
     from app.database import SessionLocal
     from app.init_db import create_tables
 
+    parser = argparse.ArgumentParser(description="Train the decision-choice models.")
+    parser.add_argument(
+        "--random-forest-source",
+        choices=("observed_human", "synthetic"),
+        default="observed_human",
+        help=(
+            "Training source for the experimental Random Forest. Synthetic is for "
+            "demonstrations only; observed_human remains the rule-memory source."
+        ),
+    )
+    arguments = parser.parse_args()
     create_tables()
     with SessionLocal() as session:
         metadata = {}
         for model_name in MODEL_NAMES:
             try:
-                metadata[model_name] = train_model(session, model_name=model_name)
+                metadata[model_name] = train_model(
+                    session,
+                    model_name=model_name,
+                    training_data_source=(
+                        arguments.random_forest_source
+                        if model_name == "random_forest"
+                        else "synthetic"
+                    ),
+                )
             except TrainingDataError as error:
                 if model_name != "random_forest":
                     raise

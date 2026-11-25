@@ -8,18 +8,18 @@ This system incorporates a three-stage process:
 The supply-chain workflow is presented in a four-layer architecture: physical operations, digital twin, the three-stage decision pipeline, and decision/outcome feedback.
 
 ## Synthetic scenario training fixture
-The prototype includes eight scenario records with three alternatives each, four decision-maker profiles, 32 recorded decisions, and 32 linked example outcomes in `backend/data/training/`. Select a scenario in the dashboard to assess it through all three decision stages. Stage 3 compares predicted choices and probabilities with recorded synthetic choices and displays the linked outcomes.
+The prototype includes 24 synthetic scenario records with three alternatives each, four decision-maker profiles, 96 recorded example choices, and 96 linked synthetic outcomes in `backend/data/training/`. Select any scenario in the dashboard to assess it through all three decision stages. Stage 3 compares estimated choices and probabilities with the recorded synthetic examples and displays their linked example outcomes.
 
 The fixture can be downloaded as [multi_decision_maker_training_scenarios.zip](./backend/data/multi_decision_maker_training_scenarios.zip).
 
-The dataset is synthetic and for workflow/model testing only. Reported top-choice agreement and multiclass Brier score describe this fixture; they are not evidence of real-world behavior, validated predictions, or model calibration. Predicted choice, recorded choice, and observed outcome remain distinct fields. The feedback screen persists ML predictions first, then stores the human decision separately so preference weights, rationale, and any later outcome can be compared without treating a difference as an error. See `backend/data/training/README.md` for the CSV schema and interpretation.
+The dataset is synthetic and for workflow/model testing only. Reported scores describe these generated records; they are not evidence of real-world behavior, validated predictions, or model calibration. Predicted choice, recorded choice, and observed outcome remain distinct fields. The feedback screen persists ML predictions first, then stores the human decision separately so preference weights, rationale, and any later outcome can be compared without treating a difference as an error. See `backend/data/training/README.md` for the CSV schema and interpretation.
 ## Stack
 - Backend: Python 3.10+, FastAPI, Pydantic
 - Frontend: React + Vite
-- Configuration-driven mock data plus an eight-scenario synthetic training fixture with 24 alternatives, four decision-maker profiles, 32 recorded decisions, and 32 outcomes
+- Configuration-driven mock data plus a 24-scenario synthetic training fixture with 72 alternatives, four decision-maker profiles, 96 recorded choices, and 96 example outcomes
 
 ## Important interpretation
-Suitability scores are weighted evaluations of option fit, separate from a person's actual choice. Logistic regression remains the synthetic-data prototype model. Random Forest is experimental and is trained only from observed human decisions; its feature importance and tree paths are model-derived patterns, never evidence of a particular person's reasoning. Human objectives, constraints, considered alternatives, preferences, stated factors, ordered reasoning steps, confidence, rationale, and later outcomes are preserved separately in the decision context and graph. Neither model is validated for operational use.
+Suitability scores are weighted evaluations of option fit, separate from a person's actual choice. Logistic regression uses the synthetic fixture. Random Forest is experimental: by default it trains only on observed human choices, while an explicit synthetic-demo option is available for testing with generated records. Its feature importance and tree paths are model-derived patterns, never evidence of a particular person's reasoning. Rule-memory extraction remains restricted to observed human choices. Human objectives, constraints, considered alternatives, preferences, stated factors, ordered reasoning steps, confidence, rationale, and later outcomes are preserved separately in the decision context and graph. Neither model is validated for operational use.
 
 ## Configure another domain
 The pipeline reads its domain, situation, criteria, weights, available options, and decision-maker profiles from `backend/app/config/decision_pipeline.json`. Edit that file to create another domain without changing the scoring implementation:
@@ -60,7 +60,7 @@ Open the URL printed by Vite (usually http://localhost:5173).
 In development, Vite proxies `/api` requests to the FastAPI backend at `http://127.0.0.1:8000`.
 
 ## Default training scenario
-`SCN-001` models a high-demand stockout risk with three supplier alternatives. The scenario selector also includes primary supplier disruption, procurement cost spike, supplier quality alert, seasonal demand surge, transport strike, perishable goods, and single-source dependency. Four decision-maker profiles—Procurement Manager, Operations Manager, Risk & Quality Manager, and Supply Chain Director—evaluate each situation. Scenario-specific operational weights and supplier scores are loaded from CSV.
+`SCN-001` models a high-demand stockout risk with three supplier alternatives. The selector includes 23 further synthetic cases covering supplier disruption, cost and quality risk, capacity constraints, transport interruptions, perishable goods, customs, launches, and sustainability requirements. Four decision-maker profiles—Procurement Manager, Operations Manager, Risk & Quality Manager, and Supply Chain Director—evaluate each situation. Scenario-specific operational weights and supplier scores are loaded from CSV.
 
 ## API routes
 - `GET /api/health` — health check
@@ -89,7 +89,18 @@ In development, Vite proxies `/api` requests to the FastAPI backend at `http://1
 3. Record the human choice, then use the sample outcome “1,200 units arrived before the 7-day deadline; no stockout occurred.”
 4. Open **Knowledge graph**, keep the `Alternative` node filter to see the supplier-choice network, or choose **All types** to explore more of the scenario. The sample context input is “Primary supplier unavailable; demand is up 30% and only five inventory days remain.”
 
-The charts compare the model's most-likely alternative with recorded human choices and show confidence on logged decisions. These are descriptive views of prototype data, not claims of validated model accuracy.
+The charts compare the model's most-likely alternative with recorded example choices and show confidence on logged decisions. These are descriptive views of synthetic prototype data, not claims of validated model accuracy.
+
+## Train and evaluate the experimental Random Forest
+First seed PostgreSQL with the fixture, then explicitly select the synthetic source when you want a demonstration model:
+
+```powershell
+cd backend
+python seed_postgresql.py
+python -m app.ml.train --random-forest-source synthetic
+```
+
+Training evaluates a grouped holdout: complete scenarios are held out from fitting, and the JSON output includes accuracy, balanced accuracy, macro-F1, multiclass Brier score, and per-class precision/recall/F1. The trained artifact then fits the final model on all 96 synthetic choice examples. These holdout metrics measure agreement with the generated choice rules only; they do not estimate how real people decide. To keep the default observed-human workflow, omit the flag (or use `--random-forest-source observed_human`). The reviewed rule-memory extractor always uses observed human decisions and does not consume synthetic records.
 
 ## Run backend tests
 From the `backend` directory:
@@ -118,188 +129,3 @@ PostgreSQL integration tests are opt-in. Set `POSTGRES_TEST_DATABASE_URL` to a d
 - Outcomes can carry validated twin updates, linking observed results back to the evolving representation. Updating the twin directly is also supported through the dashboard.
 - Twin state and its operational update event list are in-memory and reset when the backend restarts. Interactive human decisions and outcomes are persisted in PostgreSQL and represented in the context graph. No live WMS, ERP, TMS, supplier, or IoT feeds are connected.
 
-Let's take a practical example from Supply Chain Management: A sudden supplier disruption during a high-demand period.
-
-This example demonstrates all three stages of your decision model, involving four decision-makers who face the same situation but make different choices based on their priorities.
-
-# Example scenario: Supplier disruption during high demand
-
-## 1. Situation input — Stage 1
-
-A manufacturing company receives an alert that its primary supplier cannot deliver raw materials on time. Meanwhile, customer demand has increased by 30%.
-
-The management team must choose an alternative supplier.
-
-Situation parameters
-
-| Parameter                   | Reported value     |
-| --------------------------- | ------------------ |
-| Demand level                | High (+30%)        |
-| Current inventory           | 5 days of stock    |
-| Required inventory coverage | 20 days            |
-| Primary supplier status     | Disrupted          |
-| Production impact           | Potential shutdown |
-| Budget constraint           | ₹20 lakh           |
-| Delivery requirement        | Within 7 days      |
-
-The system identifies three possible alternatives.
-
-## 2. Available options and suitability — Stage 1
-
-| Parameter                    | Supplier A | Supplier B | Supplier C |
-| ---------------------------- | ---------- | ---------- | ---------- |
-| Procurement cost suitability | 95         | 70         | 80         |
-| Reliability                  | 65         | 95         | 80         |
-| Delivery speed               | 60         | 85         | 95         |
-| Risk suitability             | 60         | 90         | 75         |
-| Estimated delivery           | 7 days     | 4 days     | 2 days     |
-| Total cost                   | ₹14 lakh   | ₹18 lakh   | ₹20 lakh   |
-
-Assume the initial system calculates suitability using these weights:
-
-- Cost: 40%
-- Reliability: 25%
-- Delivery speed: 20%
-- Risk: 15%
-
-For Supplier A:
-
-\\[ (95 \times 0.40)+(65 \times 0.25)+(60 \times 0.20)+(60 \times 0.15) =74.25 \\]
-
-Overall suitability scores
-
-Supplier A
-
-74.25/100
-
-Supplier B
-
-82.25/100
-
-Supplier C
-
-82.75/100
-
-Supplier C has the highest overall suitability score, narrowly ahead of Supplier B.
-
-At this stage, the system has evaluated the alternatives. It has not made the final decision.
-
-## 3. Different decision-makers — Stage 2
-
-Now four people review the same situation and the same supplier options.
-
-Each person has different priorities.
-
-Decision-maker 1: Procurement Manager
-
-Cost-focused
-
-- Cost: 50%
-- Reliability: 20%
-- Speed: 15%
-- Risk: 15%
-
-Likely preference: Supplier A, because it is the cheapest.
-
-Decision-maker 2: Operations Manager
-
-Speed-focused
-
-- Cost: 10%
-- Reliability: 30%
-- Speed: 45%
-- Risk: 15%
-
-Likely preference: Supplier C, because it delivers fastest.
-
-Decision-maker 3: Risk & Quality Manager
-
-Risk-focused
-
-- Cost: 10%
-- Reliability: 25%
-- Speed: 15%
-- Risk: 50%
-
-Likely preference: Supplier B, because of its reliability and risk profile.
-
-Decision-maker 4: Supply Chain Director
-
-Balanced approach
-
-- Cost: 25%
-- Reliability: 30%
-- Speed: 20%
-- Risk: 25%
-
-Likely preference: Supplier B or C, balancing cost, reliability and speed.
-
-The important point is that all four people are responding to the same situation, but their priorities influence their choices.
-
-## 4. Choice probability — Stage 3
-
-The system calculates personalized utility scores and converts them into choice probabilities.
-
-For example, the output could look like this:
-
-Illustrative probability outputs, not empirically trained predictions.
-
-| Decision-maker        | Supplier A | Supplier B | Supplier C | Highest probability |
-| --------------------- | ---------- | ---------- | ---------- | ------------------- |
-| Procurement Manager   | 65%        | 20%        | 15%        | A                   |
-| Operations Manager    | 10%        | 30%        | 60%        | C                   |
-| Risk Manager          | 10%        | 70%        | 20%        | B                   |
-| Supply Chain Director | 15%        | 45%        | 40%        | B                   |
-
-Predicted supplier choice probabilities
-
-Illustrative probabilities for each decision-maker.
-
-Supplier A
-
-Supplier B
-
-Supplier C
-
-0%30%60%90%120%ProcurementOperationsRiskDirector
-
-The system can explain why different people might make different decisions in exactly the same situation.
-
-## 5. Record actual human decisions
-
-The four decision-makers actually make these choices:
-
-| Decision-maker        | Predicted first choice | Actual choice | Reason                      |
-| --------------------- | ---------------------- | ------------- | --------------------------- |
-| Procurement Manager   | A                      | A             | Lowest procurement cost     |
-| Operations Manager    | C                      | C             | Avoid production shutdown   |
-| Risk Manager          | B                      | B             | Highest reliability         |
-| Supply Chain Director | B                      | C             | Urgent customer commitments |
-
-The Supply Chain Director chose C even though B had the higher predicted probability.
-The system can record the difference between predicted and actual decisions and use the rationale to improve future preference estimates.
-
-## 6. What happens after the decision?
-
-The system records the actual operational outcome:
-
-- Was the supplier able to deliver on time?
-- Did production continue without interruption?
-- Was the budget exceeded?
-- Were quality issues reported?
-- Did the decision achieve its intended result?
-
-These outcomes become historical records for future analysis and ML training.
-
-## 7. What the system produces from Initial Rule based training
-
-## Decision intelligence output
-
-1. Situation understanding
-2. Option assessment
-3. Decision-maker modelling
-4. Choice prediction
-5. Decision recording
-6. Outcome learning
-
-# Building ML model based on the outputs of the initial system stages 

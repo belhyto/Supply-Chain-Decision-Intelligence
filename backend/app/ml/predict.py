@@ -78,9 +78,12 @@ def predict_choice(
     artifact = load_model(artifact_path)
     metadata = artifact["metadata"]
     pipeline = artifact["pipeline"]
-    if model_name == "random_forest" and metadata.get("training_data_source") != "observed_human":
+    if model_name == "random_forest" and metadata.get("training_data_source") not in {
+        "observed_human",
+        "synthetic",
+    }:
         raise ModelNotTrainedError(
-            "The experimental Random Forest must be retrained using observed human decisions."
+            "The experimental Random Forest artifact has an unsupported training-data source."
         )
 
     situation = session.get(Situation, scenario_id)
@@ -287,7 +290,18 @@ def predict_choice(
             "group_split": metadata["group_split"],
         },
         "disclaimer": (
-            "Choice probabilities are illustrative model estimates trained on synthetic "
-            "decisions; they are not validated predictions of real human behavior."
+            "The experimental Random Forest was trained on synthetic demonstration choices; "
+            "its outputs are not validated predictions of human behavior."
+            if model_name == "random_forest"
+            and metadata["training_data_source"] == "synthetic"
+            else (
+                "Choice probabilities are illustrative model estimates trained on synthetic "
+                "decisions; they are not validated predictions of real human behavior."
+                if metadata["training_data_source"] == "synthetic"
+                else (
+                    "Experimental Random Forest patterns are based on observed human choices "
+                    "but are not validated predictions of future behavior."
+                )
+            )
         ),
     }

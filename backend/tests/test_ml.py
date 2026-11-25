@@ -55,8 +55,8 @@ class MLChoiceTests(unittest.TestCase):
         self.assertIn("alternative_SUP-A_cost", dataset.numeric_features)
         self.assertIn("alternative_SUP-C_risk", dataset.numeric_features)
         self.assertIn("decision_maker_role", dataset.categorical_features)
-        self.assertEqual(len(dataset.rows), 32)
-        self.assertEqual(len(set(dataset.groups)), 8)
+        self.assertEqual(len(dataset.rows), len(main.TRAINING_DATA["decisions"]))
+        self.assertEqual(len(set(dataset.groups)), len(main.TRAINING_DATA["scenarios"]))
 
     def test_grouped_multinomial_model_predicts_probabilities_for_eligible_alternatives(self):
         metadata = train_model(self.session, self.model_path)
@@ -148,6 +148,40 @@ class MLChoiceTests(unittest.TestCase):
         self.assertTrue(explanation["top_features"])
         self.assertIn("not evidence", explanation["rule_path_note"])
 
+    def test_random_forest_can_train_and_evaluate_synthetic_scenarios_explicitly(self):
+        metadata = train_model(
+            self.session,
+            self.model_path,
+            model_name="random_forest",
+            training_data_source="synthetic",
+        )
+
+        self.assertEqual(metadata["training_data_source"], "synthetic")
+        self.assertEqual(
+            metadata["training_scenario_count"],
+            len(main.TRAINING_DATA["scenarios"]),
+        )
+        holdout = metadata["group_split"]
+        self.assertFalse(
+            set(holdout["training_scenario_ids"]) & set(holdout["holdout_scenario_ids"])
+        )
+        self.assertGreater(holdout["holdout_sample_count"], 0)
+        self.assertIn("macro_f1", holdout["holdout_metrics"])
+        self.assertIn("multiclass_brier_score", holdout["holdout_metrics"])
+
+        with patch(
+            "app.ml.predict.MODEL_PATHS",
+            {"random_forest": self.model_path},
+        ):
+            prediction = predict_choice(
+                self.session,
+                "SCN-009",
+                "DM-01",
+                model_name="random_forest",
+            )
+        self.assertEqual(prediction["model"]["training_data_source"], "synthetic")
+        self.assertIn("synthetic demonstration choices", prediction["disclaimer"])
+
     def test_fastapi_prediction_endpoint_uses_the_trained_model(self):
         train_model(self.session, self.model_path)
         with patch("app.ml.predict.MODEL_PATH", self.model_path):
@@ -160,7 +194,10 @@ class MLChoiceTests(unittest.TestCase):
             )
 
         self.assertEqual(result["scenario_id"], "SCN-001")
-        self.assertEqual(result["model"]["training_sample_count"], 32)
+        self.assertEqual(
+            result["model"]["training_sample_count"],
+            len(main.TRAINING_DATA["decisions"]),
+        )
         self.assertTrue(result["model"]["version"])
         self.assertEqual(len(result["probabilities"]), 3)
         self.assertTrue(result["persisted"])
